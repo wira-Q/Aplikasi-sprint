@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'config/supabase_config.dart';
 import 'core/utils/auth_debug_page.dart';
 import 'core/utils/connection_tester.dart';
+import 'core/utils/jobs_debug_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +80,13 @@ class _ConnectionTestPageState extends State<_ConnectionTestPage> {
                       MaterialPageRoute(builder: (_) => const AuthDebugPage()),
                     ),
                     child: const Text('Uji Auth (sementara)'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const JobsDebugPage()),
+                    ),
+                    child: const Text('Uji Company & Jobs (sementara)'),
                   ),
                   const SizedBox(height: 16),
                   if (_result != null) ...[
