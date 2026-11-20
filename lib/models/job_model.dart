@@ -9,6 +9,7 @@ class JobOptions {
     'Internship',
     'Freelance',
   ];
+  static const List<String> workSystems = ['WFA', 'WFO', 'Hybrid'];
   static const String statusOpen = 'Dibuka';
   static const String statusClosed = 'Ditutup';
 }

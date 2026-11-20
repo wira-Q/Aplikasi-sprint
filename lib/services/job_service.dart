@@ -40,6 +40,9 @@ class JobService {
     if (jobType != null && !JobOptions.jobTypes.contains(jobType)) {
       throw const AppException('Jenis pekerjaan filter tidak valid.');
     }
+    if (workSystem != null && !JobOptions.workSystems.contains(workSystem)) {
+      throw const AppException('Sistem kerja filter tidak valid.');
+    }
     try {
       var q = _client
           .from('jobs')
@@ -54,9 +57,7 @@ class JobService {
       }
       if (location != null) q = q.eq('location', location);
       if (jobType != null) q = q.eq('job_type', jobType);
-      if (workSystem != null && workSystem.trim().isNotEmpty) {
-        q = q.eq('work_system', workSystem.trim());
-      }
+      if (workSystem != null) q = q.eq('work_system', workSystem);
       if (education != null && education.trim().isNotEmpty) {
         q = q.eq('education', education.trim());
       }
@@ -168,6 +169,7 @@ class JobService {
   }
 
   /// Hanya field yang diisi (tidak null) yang diubah.
+  /// String kosong pada field opsional mengosongkan nilainya.
   Future<JobModel> updateJob(
     int idJob, {
     String? title,
@@ -288,8 +290,11 @@ class JobService {
         throw const AppException('Jenis pekerjaan tidak valid.');
       }
     }
-    if (workSystem != null && workSystem.trim().isEmpty && !creating) {
-      throw const AppException('Sistem kerja tidak boleh kosong.');
+    // Kolom work_system boleh kosong, tetapi jika diisi harus WFA/WFO/Hybrid.
+    if (workSystem != null &&
+        workSystem.trim().isNotEmpty &&
+        !JobOptions.workSystems.contains(workSystem.trim())) {
+      throw const AppException('Sistem kerja tidak valid.');
     }
     if (salary != null && (salary.isNaN || salary.isInfinite || salary < 0)) {
       throw const AppException('Gaji tidak boleh negatif.');
