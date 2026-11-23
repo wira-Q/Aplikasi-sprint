@@ -1,6 +1,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/JobSeeker/signUp.dart';
+import 'onBoarding1.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -231,38 +233,38 @@ class _LoginState extends State<Login> {
                       const SizedBox(height: 35),
 
                       // TOMBOL LOGIN
-                      SizedBox(
-                        width: double.infinity,
-                        height: 38,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Tombol Login berhasil ditekan!',
-                                ),
-                              ),
-                            );
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF2862E8),
-                            foregroundColor: Colors.black,
-                            elevation: 0,
-                            side: BorderSide(color: primaryColor),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
+                     SizedBox(
+                      width: double.infinity,
+                      height: 38,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          // Navigasi ke halaman OnBoarding1
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const OnBoarding1(), // Pastikan nama class-nya sesuai
                             ),
-                          ),
-                          child: Text(
-                            'Login',
-                            style: GoogleFonts.poppins(fontSize: 14),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2862E8),
+                          foregroundColor: Colors.black,
+                          elevation: 0,
+                          side: BorderSide(color: primaryColor),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
                           ),
                         ),
+                        child: Text(
+                          'Login',
+                          style: GoogleFonts.poppins(fontSize: 14),
+                        ),
                       ),
+                    ),
 
                       const SizedBox(height: 8),
 
-                      // LINK SIGN UP
+                     // LINK SIGN UP
                       Center(
                         child: Wrap(
                           alignment: WrapAlignment.center,
@@ -273,11 +275,11 @@ class _LoginState extends State<Login> {
                             ),
                             GestureDetector(
                               onTap: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Halaman Sign Up belum dibuat',
-                                    ),
+                                // Navigasi ke halaman SignUp
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => const SignUp(), // Ganti dengan nama class SignUp Anda
                                   ),
                                 );
                               },
@@ -286,6 +288,7 @@ class _LoginState extends State<Login> {
                                 style: GoogleFonts.poppins(
                                   fontSize: 10,
                                   color: primaryColor,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
