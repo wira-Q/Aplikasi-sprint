@@ -26,6 +26,8 @@ class AuthService {
   /// Dengarkan untuk mendeteksi login, logout, dan session berakhir.
   Stream<AuthState> get authStateChanges => _auth.onAuthStateChange;
 
+  /// gender dan education hanya dikirim untuk role job_seeker.
+  /// Untuk recruiter, keduanya diabaikan walaupun diisi.
   Future<SignUpResult> signUp({
     required String name,
     required String email,
@@ -40,6 +42,7 @@ class AuthService {
     if (role == UserRole.admin) {
       throw const AppException('Peran tidak valid untuk pendaftaran.');
     }
+    final isJobSeeker = role == UserRole.jobSeeker;
     try {
       final res = await _auth.signUp(
         email: email.trim(),
@@ -48,10 +51,10 @@ class AuthService {
         data: {
           'name': name.trim(),
           'role': role.value,
-          if (gender != null) 'gender': gender,
+          if (isJobSeeker && gender != null) 'gender': gender,
           if (phone != null) 'phone': phone,
           if (location != null) 'location': location,
-          if (education != null) 'education': education,
+          if (isJobSeeker && education != null) 'education': education,
         },
       );
       final user = res.user;

@@ -7,6 +7,8 @@ import 'core/utils/jobs_debug_page.dart';
 import 'core/utils/applications_debug_page.dart';
 import 'core/utils/interviews_debug_page.dart';
 import 'core/utils/logo_debug_page.dart';
+import 'core/utils/avatar_debug_page.dart';
+import 'core/utils/profile_debug_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -115,6 +117,26 @@ class _ConnectionTestPageState extends State<_ConnectionTestPage> {
                       MaterialPageRoute(builder: (_) => const LogoDebugPage()),
                     ),
                     child: const Text('Uji Logo Perusahaan (sementara)'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const AvatarDebugPage(),
+                      ),
+                    ),
+                    child: const Text('Uji Foto Profil (sementara)'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ProfileDebugPage(),
+                      ),
+                    ),
+                    child: const Text(
+                      'Uji Onboarding & Rekomendasi (sementara)',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   if (_result != null) ...[

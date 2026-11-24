@@ -6,6 +6,7 @@ import '../core/utils/app_exception.dart';
 import '../core/utils/postgrest_error_mapper.dart';
 import '../models/company_model.dart';
 import '../models/job_model.dart';
+import '../models/profile_options.dart';
 import 'company_service.dart';
 
 class JobService {
@@ -22,7 +23,7 @@ class JobService {
   // ---------------------------------------------------------------- JOB SEEKER
 
   /// Daftar lowongan Dibuka, dengan pencarian, filter, dan pagination.
-  /// [page] dimulai dari 0.
+  /// Filter utama menerima SATU lokasi. [page] dimulai dari 0.
   Future<List<JobModel>> getJobs({
     String? query,
     String? location,
@@ -43,6 +44,10 @@ class JobService {
     if (workSystem != null && !JobOptions.workSystems.contains(workSystem)) {
       throw const AppException('Sistem kerja filter tidak valid.');
     }
+    final educationFilter = _clean(education);
+    if (educationFilter != null && !EducationOptions.isValid(educationFilter)) {
+      throw const AppException('Pendidikan filter tidak valid.');
+    }
     try {
       var q = _client
           .from('jobs')
@@ -58,9 +63,7 @@ class JobService {
       if (location != null) q = q.eq('location', location);
       if (jobType != null) q = q.eq('job_type', jobType);
       if (workSystem != null) q = q.eq('work_system', workSystem);
-      if (education != null && education.trim().isNotEmpty) {
-        q = q.eq('education', education.trim());
-      }
+      if (educationFilter != null) q = q.eq('education', educationFilter);
 
       final from = page * pageSize;
       final rows = await q
@@ -71,6 +74,45 @@ class JobService {
       throw mapPostgrestError(e);
     } catch (e) {
       _log('getJobs error: ${e.runtimeType}');
+      throw const AppException('Gagal memuat lowongan. Periksa koneksi Anda.');
+    }
+  }
+
+  /// Halaman rekomendasi: boleh banyak lokasi dan jenis pekerjaan, diambil
+  /// dari preferensi di profil (UserModel.preferredLocations dan
+  /// preferredJobTypes). Daftar kosong berarti tidak difilter. Jika hasilnya
+  /// kosong, UI boleh menampilkan getJobs() biasa sebagai cadangan.
+  Future<List<JobModel>> getRecommendedJobs({
+    List<String> locations = const [],
+    List<String> jobTypes = const [],
+    int page = 0,
+    int pageSize = 10,
+  }) async {
+    _requireUid();
+    _validatePaging(page, pageSize);
+    if (locations.any((l) => !JobOptions.locations.contains(l))) {
+      throw const AppException('Lokasi rekomendasi tidak valid.');
+    }
+    if (jobTypes.any((t) => !JobOptions.jobTypes.contains(t))) {
+      throw const AppException('Jenis pekerjaan rekomendasi tidak valid.');
+    }
+    try {
+      var q = _client
+          .from('jobs')
+          .select(_select)
+          .eq('status', JobOptions.statusOpen);
+      if (locations.isNotEmpty) q = q.inFilter('location', locations);
+      if (jobTypes.isNotEmpty) q = q.inFilter('job_type', jobTypes);
+
+      final from = page * pageSize;
+      final rows = await q
+          .order('id_job', ascending: false)
+          .range(from, from + pageSize - 1);
+      return rows.map((r) => JobModel.fromMap(r)).toList();
+    } on PostgrestException catch (e) {
+      throw mapPostgrestError(e);
+    } catch (e) {
+      _log('getRecommendedJobs error: ${e.runtimeType}');
       throw const AppException('Gagal memuat lowongan. Periksa koneksi Anda.');
     }
   }
@@ -139,6 +181,7 @@ class JobService {
       location: location,
       jobType: jobType,
       workSystem: workSystem,
+      education: education,
       salary: salary,
       creating: true,
     );
@@ -188,6 +231,7 @@ class JobService {
       location: location,
       jobType: jobType,
       workSystem: workSystem,
+      education: education,
       salary: salary,
       creating: false,
     );
@@ -262,6 +306,7 @@ class JobService {
     String? location,
     String? jobType,
     String? workSystem,
+    String? education,
     num? salary,
     required bool creating,
   }) {
@@ -290,11 +335,16 @@ class JobService {
         throw const AppException('Jenis pekerjaan tidak valid.');
       }
     }
-    // Kolom work_system boleh kosong, tetapi jika diisi harus WFA/WFO/Hybrid.
+    // work_system boleh kosong, tetapi jika diisi harus WFA/WFO/Hybrid.
     if (workSystem != null &&
         workSystem.trim().isNotEmpty &&
         !JobOptions.workSystems.contains(workSystem.trim())) {
       throw const AppException('Sistem kerja tidak valid.');
+    }
+    // education boleh kosong, tetapi jika diisi harus salah satu pilihan.
+    final edu = _clean(education);
+    if (edu != null && !EducationOptions.isValid(edu)) {
+      throw const AppException('Pilihan pendidikan tidak valid.');
     }
     if (salary != null && (salary.isNaN || salary.isInfinite || salary < 0)) {
       throw const AppException('Gaji tidak boleh negatif.');
