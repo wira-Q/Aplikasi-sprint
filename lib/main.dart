@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:sprint/JobSeeker/splashScreen.dart';
 
 import 'config/supabase_config.dart';
-import 'core/utils/auth_debug_page.dart';
-import 'core/utils/connection_tester.dart';
-import 'core/utils/jobs_debug_page.dart';
 import 'core/utils/applications_debug_page.dart';
-import 'core/utils/interviews_debug_page.dart';
-import 'core/utils/logo_debug_page.dart';
+import 'core/utils/auth_debug_page.dart';
 import 'core/utils/avatar_debug_page.dart';
+import 'core/utils/connection_tester.dart';
+import 'core/utils/interviews_debug_page.dart';
+import 'core/utils/jobs_debug_page.dart';
+import 'core/utils/logo_debug_page.dart';
 import 'core/utils/profile_debug_page.dart';
+
+/// Menu uji sementara hanya tampil jika dijalankan dengan:
+/// flutter run --dart-define-from-file=env.json --dart-define=DEBUG_MENU=true
+/// Hapus bagian ini saat penyambungan selesai.
+const bool _showDebugMenu = String.fromEnvironment('DEBUG_MENU') == 'true';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,19 +35,47 @@ class SprintApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Widget home;
+    if (initError != null) {
+      home = _InitErrorPage(message: initError!);
+    } else if (_showDebugMenu) {
+      home = const _ConnectionTestPage();
+    } else {
+      home = const Splashscreen();
+    }
+
     return MaterialApp(
       title: 'Sprint',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
-      home: _ConnectionTestPage(initError: initError),
+      home: home,
     );
   }
 }
 
-// SEMENTARA (FASE 1-2): akan digantikan splash/login page.
+class _InitErrorPage extends StatelessWidget {
+  const _InitErrorPage({required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.red),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// SEMENTARA: menu uji backend. Hapus saat penyambungan selesai.
 class _ConnectionTestPage extends StatefulWidget {
-  const _ConnectionTestPage({this.initError});
-  final String? initError;
+  const _ConnectionTestPage();
 
   @override
   State<_ConnectionTestPage> createState() => _ConnectionTestPageState();
@@ -61,94 +95,50 @@ class _ConnectionTestPageState extends State<_ConnectionTestPage> {
     });
   }
 
+  Widget _open(String label, Widget page) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: OutlinedButton(
+      onPressed: () =>
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => page)),
+      child: Text(label),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
-    final error = widget.initError;
     return Scaffold(
-      appBar: AppBar(title: const Text('Sprint - Uji Koneksi')),
-      body: Padding(
+      appBar: AppBar(title: const Text('Sprint - Menu Uji (sementara)')),
+      body: ListView(
         padding: const EdgeInsets.all(24),
-        child: error != null
-            ? Text(error, style: const TextStyle(color: Colors.red))
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  FilledButton(
-                    onPressed: _loading ? null : _runTest,
-                    child: Text(
-                      _loading ? 'Menguji...' : 'Uji koneksi Supabase',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const AuthDebugPage()),
-                    ),
-                    child: const Text('Uji Auth (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const JobsDebugPage()),
-                    ),
-                    child: const Text('Uji Company & Jobs (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const ApplicationsDebugPage(),
-                      ),
-                    ),
-                    child: const Text('Uji CV & Lamaran (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const InterviewsDebugPage(),
-                      ),
-                    ),
-                    child: const Text('Uji Interview & Notifikasi (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const LogoDebugPage()),
-                    ),
-                    child: const Text('Uji Logo Perusahaan (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const AvatarDebugPage(),
-                      ),
-                    ),
-                    child: const Text('Uji Foto Profil (sementara)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const ProfileDebugPage(),
-                      ),
-                    ),
-                    child: const Text(
-                      'Uji Onboarding & Rekomendasi (sementara)',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_result != null) ...[
-                    Text(
-                      'Status: ${_result!.status.name}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(_result!.message),
-                  ],
-                ],
-              ),
+        children: [
+          FilledButton(
+            onPressed: _loading ? null : _runTest,
+            child: Text(_loading ? 'Menguji...' : 'Uji koneksi Supabase'),
+          ),
+          _open('Uji Auth (sementara)', const AuthDebugPage()),
+          _open('Uji Company & Jobs (sementara)', const JobsDebugPage()),
+          _open('Uji CV & Lamaran (sementara)', const ApplicationsDebugPage()),
+          _open(
+            'Uji Interview & Notifikasi (sementara)',
+            const InterviewsDebugPage(),
+          ),
+          _open('Uji Logo Perusahaan (sementara)', const LogoDebugPage()),
+          _open('Uji Foto Profil (sementara)', const AvatarDebugPage()),
+          _open(
+            'Uji Onboarding & Rekomendasi (sementara)',
+            const ProfileDebugPage(),
+          ),
+          _open('Buka aplikasi (Splashscreen)', const Splashscreen()),
+          const SizedBox(height: 16),
+          if (_result != null) ...[
+            Text(
+              'Status: ${_result!.status.name}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(_result!.message),
+          ],
+        ],
       ),
     );
   }
