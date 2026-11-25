@@ -29,6 +29,7 @@ class ApplicationModel {
     this.jobLocation,
     this.jobType,
     this.companyName,
+    this.companyLogo,
     this.applicantName,
     this.applicantEmail,
     this.applicantPhone,
@@ -52,6 +53,9 @@ class ApplicationModel {
   final String? jobLocation;
   final String? jobType;
   final String? companyName;
+
+  /// Path logo di bucket logos. Ubah jadi URL dengan LogoService.publicUrl.
+  final String? companyLogo;
 
   // Dari relasi users (sisi recruiter).
   final String? applicantName;
@@ -90,6 +94,7 @@ class ApplicationModel {
       jobLocation: job?['location'] as String?,
       jobType: job?['job_type'] as String?,
       companyName: company?['company_name'] as String?,
+      companyLogo: company?['logo'] as String?,
       applicantName: user?['name'] as String?,
       applicantEmail: user?['email'] as String?,
       applicantPhone: user?['phone'] as String?,

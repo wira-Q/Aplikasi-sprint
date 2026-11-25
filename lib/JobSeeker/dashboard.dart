@@ -1,7 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/job_display.dart';
+import 'package:sprint/core/widgets/company_logo.dart';
+import 'package:sprint/core/widgets/notification_sheet.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/user_model.dart';
+import 'package:sprint/services/job_service.dart';
+import 'package:sprint/services/notification_service.dart';
+import 'package:sprint/services/user_service.dart';
 import 'maps.dart';
 import 'detailLowongan.dart';
+import 'package:sprint/services/application_service.dart';
+import 'lamaran_page_resolver.dart';
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
@@ -11,79 +24,265 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
+  static const int _pageSize = 10;
+
+  /// Jumlah notifikasi belum dibaca dicek ulang setiap interval ini.
+  static const Duration _unreadRefresh = Duration(seconds: 60);
+
+  final JobService _jobService = JobService();
+  final UserService _users = UserService();
+  final NotificationService _notifications = NotificationService();
+  final ApplicationService _applications = ApplicationService();
   final TextEditingController _searchController = TextEditingController();
 
-  // 1. Pindahkan data lowongan ke dalam List agar mudah difilter
-  final List _allJobs = [
-    {
-      'title': 'AI Engineering',
-      'salary': 'Rp 1–1,2jt/bulan',
-      'company': 'DB Klik',
-      'location': 'Surabaya, Jawa Timur',
-      'status': 'Aktif',
-      'tags': ['Magang', '<1 Tahun', 'S1', 'Acara kantor & tim', 'Uang makan', 'Jenjang karir'],
-      'companyLogo': 'assets/p1.png',
-    },
-    {
-      'title': 'IT Programmer - Odoo',
-      'salary': 'Rp 6–8jt/bulan',
-      'company': 'PT Arina Multikarya',
-      'location': 'Surabaya, Jawa Timur',
-      'status': 'Online 7m lalu',
-      'tags': ['Kontrak', '1–3 thn', 'S1', 'Uang Transport', 'Bonus Kinerja', 'Komisi Penjualan', 'BPJS Tenaga Kerja', 'BPJS Kesehatan'],
-      'companyLogo': 'assets/p2.png',
-    },
-    {
-      'title': 'Magang Programmer / Software Developer Intern',
-      'salary': '',
-      'company': 'PT QLCOM Solusi Bisnis',
-      'location': 'Surabaya, Jawa Timur',
-      'status': 'Online 4jm lalu',
-      'tags': ['Magang', '1–3 thn', 'D1–D4', 'Makan Gratis'],
-      'companyLogo': 'assets/p3.png',
-    },
-  ];
+  Timer? _debounce;
+  Timer? _unreadTimer;
+  UserModel? _profile;
+  int _unreadCount = 0;
 
-  // List penampung hasil filter
-  List _filteredJobs = [];
+  List<JobModel> _jobs = [];
+  bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = false;
+  String? _errorMessage;
+
+  /// Kata kunci yang sedang dipakai (sudah melewati jeda pengetikan).
+  String _query = '';
+
+  /// true = daftar rekomendasi (dari preferensi profil). Jika rekomendasi
+  /// kosong, otomatis memakai semua lowongan terbaru.
+  bool _recommendMode = true;
+  int _page = 0;
+
+  /// Untuk mengabaikan hasil permintaan lama.
+  int _requestId = 0;
 
   @override
   void initState() {
     super.initState();
-    // Awal buka halaman, tampilkan semua lowongan
-    _filteredJobs = _allJobs;
+    _init();
+    _loadUnread();
+    _unreadTimer = Timer.periodic(_unreadRefresh, (_) => _loadUnread());
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _unreadTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  // 2. Fungsi untuk memfilter lowongan berdasarkan kata kunci
-  void _filterJobs(String query) {
-    final keyword = query.toLowerCase().trim();
+  Future<void> _init() async {
+    try {
+      final profile = await _users.getCurrentProfile();
+      if (!mounted) return;
+      setState(() => _profile = profile);
+    } catch (_) {
+      // Nama kosong tidak menghalangi daftar lowongan.
+    }
+    await _loadFirstPage();
+  }
 
-    setState(() {
-      if (keyword.isEmpty) {
-        _filteredJobs = _allJobs;
-      } else {
-        _filteredJobs = _allJobs.where((job) {
-          final titleMatch = job['title'].toString().toLowerCase().contains(keyword);
-          final companyMatch = job['company'].toString().toLowerCase().contains(keyword);
-          final tagsMatch = (job['tags'] as List<String>).any(
-            (tag) => tag.toLowerCase().contains(keyword),
-          );
+  Future<void> _loadUnread() async {
+    try {
+      final count = await _notifications.getUnreadCount();
+      if (!mounted) return;
+      setState(() => _unreadCount = count);
+    } catch (_) {
+      // Lencana tidak diperbarui bila gagal; tidak mengganggu daftar lowongan.
+    }
+  }
 
-          return titleMatch || companyMatch || tagsMatch;
-        }).toList();
+  Future<void> _openNotifications() async {
+    await showNotificationSheet(context, onOpenApplication: _openApplication);
+    // Perbarui lencana setelah popup ditutup (sebagian mungkin sudah dibaca).
+    if (mounted) _loadUnread();
+  }
+
+  /// Dipanggil popup notifikasi (setelah popup tertutup).
+  Future<void> _openApplication(int idApplication) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final application = await _applications.getMyApplicationById(
+        idApplication,
+      );
+      if (!mounted) return;
+      if (application == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Lamaran tidak ditemukan.')),
+        );
+        return;
       }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => lamaranDetailPage(application)),
+      );
+      if (mounted) _loadUnread();
+    } on AppException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Gagal membuka lamaran. Periksa koneksi Anda.'),
+        ),
+      );
+    }
+  }
+
+  Future<List<JobModel>> _fetch(int page, bool recommend) {
+    if (recommend) {
+      final p = _profile;
+      return _jobService.getRecommendedJobs(
+        locations: p?.preferredLocations ?? const [],
+        jobTypes: p?.preferredJobTypes ?? const [],
+        page: page,
+        pageSize: _pageSize,
+      );
+    }
+    return _jobService.getJobs(
+      query: _query.isEmpty ? null : _query,
+      page: page,
+      pageSize: _pageSize,
+    );
+  }
+
+  Future<void> _loadFirstPage() async {
+    final id = ++_requestId;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+      _page = 0;
     });
+    try {
+      var recommend = _query.isEmpty;
+      var list = await _fetch(0, recommend);
+      if (recommend && list.isEmpty) {
+        recommend = false;
+        list = await _fetch(0, false);
+      }
+      if (!mounted || id != _requestId) return;
+      setState(() {
+        _recommendMode = recommend;
+        _jobs = list;
+        _hasMore = list.length == _pageSize;
+        _isLoading = false;
+      });
+    } on AppException catch (e) {
+      if (!mounted || id != _requestId) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted || id != _requestId) return;
+      setState(() {
+        _errorMessage = 'Gagal memuat lowongan. Periksa koneksi Anda.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_isLoadingMore || !_hasMore) return;
+    final id = _requestId;
+    setState(() => _isLoadingMore = true);
+    try {
+      final list = await _fetch(_page + 1, _recommendMode);
+      if (!mounted || id != _requestId) return;
+      setState(() {
+        _page += 1;
+        _jobs = [..._jobs, ...list];
+        _hasMore = list.length == _pageSize;
+        _isLoadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoadingMore = false);
+      final message = e is AppException
+          ? e.message
+          : 'Gagal memuat lowongan. Periksa koneksi Anda.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {}); // memperbarui tombol hapus (X)
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      final query = value.trim();
+      if (query == _query) return;
+      _query = query;
+      _loadFirstPage();
+    });
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    _searchController.clear();
+    _query = '';
+    _loadFirstPage();
+  }
+
+  String get _sectionTitle {
+    if (_query.isNotEmpty) return 'Hasil pencarian';
+    return _recommendMode ? 'Rekomendasi untuk mu' : 'Lowongan terbaru';
+  }
+
+  // Tombol lonceng notifikasi dengan lencana jumlah belum dibaca.
+  Widget _buildBellButton(Color primaryColor) {
+    final label = _unreadCount > 99 ? '99+' : '$_unreadCount';
+    return GestureDetector(
+      onTap: _openNotifications,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: primaryColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.notifications_none_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          if (_unreadCount > 0)
+            Positioned(
+              top: -4,
+              right: -4,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+                child: Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final Color primaryColor = const Color(0xFF203F8B);
+    final name = _profile?.name.trim() ?? '';
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -93,32 +292,87 @@ class _DashboardState extends State<Dashboard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. BAGIAN HEADER (SAPAAN & IKON LOKASI)
+              // 1. BAGIAN HEADER (SAPAAN & LONCENG NOTIFIKASI)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'Halo, hildan',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                  Expanded(
+                    child: Text(
+                      name.isEmpty ? 'Halo!' : 'Halo, $name',
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 12),
+                  _buildBellButton(primaryColor),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // 2. SEARCH BAR (lebih pendek) + TOMBOL LOKASI DI KANANNYA
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: _onSearchChanged,
+                      decoration: InputDecoration(
+                        hintText: 'Cari lowongan atau keahlian',
+                        hintStyle: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                        prefixIcon: const Icon(
+                          Icons.search,
+                          color: Colors.grey,
+                          size: 20,
+                        ),
+                        // Tombol hapus (X) muncul saat kolom pencarian terisi
+                        suffixIcon: _searchController.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(
+                                  Icons.clear,
+                                  color: Colors.grey,
+                                  size: 18,
+                                ),
+                                onPressed: _clearSearch,
+                              )
+                            : null,
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFFF0F4FF),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
                   GestureDetector(
-                    onTap: () {
-                      Navigator.push(
+                    onTap: () async {
+                      final changed = await Navigator.push<bool>(
                         context,
                         MaterialPageRoute(
                           builder: (context) => const MapsPage(),
                         ),
                       );
+                      // Kota diubah: muat ulang profil dan rekomendasi.
+                      if (changed == true && mounted) _init();
                     },
                     child: Container(
-                      padding: const EdgeInsets.all(10),
+                      width: 48,
+                      height: 48,
                       decoration: BoxDecoration(
                         color: primaryColor,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Icon(
                         Icons.location_on,
@@ -130,48 +384,11 @@ class _DashboardState extends State<Dashboard> {
                 ],
               ),
 
-              const SizedBox(height: 16),
-
-              // 2. SEARCH BAR DENGAN FILTER REAL-TIME
-              TextField(
-                controller: _searchController,
-                onChanged: _filterJobs, // Memanggil fungsi filter setiap kali mengetik
-                decoration: InputDecoration(
-                  hintText: 'Cari HRD, Lowongan, atau Perusahaan',
-                  hintStyle: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey,
-                  ),
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    color: Colors.grey,
-                    size: 20,
-                  ),
-                  // Tombol hapus (X) muncul otomatis saat kolom pencarian terisi
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear, color: Colors.grey, size: 18),
-                          onPressed: () {
-                            _searchController.clear();
-                            _filterJobs('');
-                          },
-                        )
-                      : null,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  filled: true,
-                  fillColor: const Color(0xFFF0F4FF),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-
               const SizedBox(height: 24),
 
-              // 3. JUDUL REKOMENDASI
+              // 3. JUDUL DAFTAR
               Text(
-                'Rekomendasi untuk mu',
+                _sectionTitle,
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -181,47 +398,8 @@ class _DashboardState extends State<Dashboard> {
 
               const SizedBox(height: 16),
 
-              // 4. KARTU DAFTAR LOWONGAN (DINAMIS SESUAI HASIL FILTER)
-              if (_filteredJobs.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 40),
-                  child: Center(
-                    child: Column(
-                      children: [
-                        Icon(Icons.search_off_rounded, size: 48, color: Colors.grey.shade400),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Lowongan tidak ditemukan',
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _filteredJobs.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 16),
-                  itemBuilder: (context, index) {
-                    final job = _filteredJobs[index];
-                    return _buildJobCard(
-                      context: context,
-                      title: job['title'],
-                      salary: job['salary'],
-                      company: job['company'],
-                      location: job['location'],
-                      status: job['status'],
-                      tags: List<String>.from(job['tags']),
-                      companyLogo: job['companyLogo'],
-                    );
-                  },
-                ),
+              // 4. KARTU DAFTAR LOWONGAN
+              _buildContent(),
             ],
           ),
         ),
@@ -229,23 +407,97 @@ class _DashboardState extends State<Dashboard> {
     );
   }
 
+  Widget _buildContent() {
+    if (_isLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_errorMessage != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40),
+        child: Center(
+          child: Column(
+            children: [
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: _loadFirstPage,
+                child: const Text('Coba lagi'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_jobs.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(
+                Icons.search_off_rounded,
+                size: 48,
+                color: Colors.grey.shade400,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Lowongan tidak ditemukan',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: _jobs.length,
+          separatorBuilder: (context, index) => const SizedBox(height: 16),
+          itemBuilder: (context, index) => _buildJobCard(_jobs[index]),
+        ),
+        if (_hasMore)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: _isLoadingMore
+                ? const CircularProgressIndicator()
+                : OutlinedButton(
+                    onPressed: _loadMore,
+                    child: const Text('Muat lebih banyak'),
+                  ),
+          ),
+      ],
+    );
+  }
+
   // Widget Helper untuk membuat Card Lowongan Kerja
-  Widget _buildJobCard({
-    required BuildContext context,
-    required String title,
-    required String salary,
-    required String company,
-    required String location,
-    required String status,
-    required List<String> tags,
-    required String companyLogo,
-  }) {
+  Widget _buildJobCard(JobModel job) {
+    final salary = JobDisplay.salary(job.salary);
+    final company = job.companyName ?? '-';
+    final tags = JobDisplay.tags(job);
+
     return GestureDetector(
       onTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => const DetailLowongan(),
+            builder: (context) => DetailLowongan(idJob: job.idJob),
           ),
         );
       },
@@ -272,7 +524,7 @@ class _DashboardState extends State<Dashboard> {
               children: [
                 Expanded(
                   child: Text(
-                    title,
+                    job.title,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
@@ -295,19 +547,34 @@ class _DashboardState extends State<Dashboard> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.business_center_outlined, size: 13, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Text(
-                      company,
-                      style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade700),
-                    ),
-                  ],
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.business_center_outlined,
+                        size: 13,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          company,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 Text(
-                  location,
-                  style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade600),
+                  job.location,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                  ),
                 ),
               ],
             ),
@@ -317,7 +584,10 @@ class _DashboardState extends State<Dashboard> {
               runSpacing: 6,
               children: tags.map((tag) {
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF3F4F6),
                     borderRadius: BorderRadius.circular(6),
@@ -338,44 +608,18 @@ class _DashboardState extends State<Dashboard> {
             const SizedBox(height: 10),
             Row(
               children: [
-                Image.asset(
-                  companyLogo,
-                  width: 16,
-                  height: 16,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Icon(Icons.business, size: 16, color: Colors.grey);
-                  },
-                ),
+                CompanyLogo(path: job.companyLogo, size: 16, radius: 4),
                 const SizedBox(width: 6),
-                Text(
-                  company,
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black87,
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade100,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
+                Expanded(
                   child: Text(
-                    'Premium',
+                    company,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.poppins(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.amber.shade800,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.black87,
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '•  $status',
-                  style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey),
                 ),
               ],
             ),

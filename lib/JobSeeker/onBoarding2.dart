@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/profile_options.dart';
+import 'package:sprint/services/user_service.dart';
 import 'onBoarding3.dart';
+
 class OnBoarding2 extends StatefulWidget {
   const OnBoarding2({super.key});
 
@@ -12,20 +17,74 @@ class _OnBoarding2State extends State<OnBoarding2> {
   // Mengatur warna utama halaman
   final Color primaryColor = const Color(0xFF203F8B);
 
+  final UserService _users = UserService();
+
   // State untuk menyimpan pilihan pendidikan terakhir
   String? _selectedEducation;
-  
-  // Daftar pilihan pendidikan terakhir
-  final List<String> _educationList = [
-    'SMA / SMK sederajat',
-    'Diploma (D3 / D4)',
-    'Sarjana (S1)',
-    'Magister (S2)',
-    'Lainnya'
-  ];
 
-  // State untuk menyimpan jenis pekerjaan yang dipilih (bisa multiple atau single, contoh kali ini single/multiple selection)
+  // Daftar pilihan pendidikan terakhir (sama dengan aturan di database)
+  final List<String> _educationList = EducationOptions.values;
+
+  // State untuk menyimpan jenis pekerjaan yang dipilih (boleh lebih dari satu).
+  // Nilainya HARUS nilai database: Full-time, Part-time, Internship, Freelance.
   final Set<String> _selectedJobTypes = {'Part-time'};
+
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  IconData _iconFor(String jobType) {
+    switch (jobType) {
+      case 'Part-time':
+        return Icons.work_outline;
+      case 'Internship':
+        return Icons.person_outline;
+      case 'Freelance':
+        return Icons.description_outlined;
+      default:
+        return Icons.business_center_outlined;
+    }
+  }
+
+  Future<void> _next() async {
+    if (_isLoading) return;
+
+    final education = _selectedEducation;
+    if (education == null) {
+      setState(
+        () => _errorMessage = 'Pilih pendidikan terakhir terlebih dahulu.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await _users.updateProfile(education: education);
+      await _users.updatePreferences(jobTypes: _selectedJobTypes.toList());
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // Navigasi ke OnBoarding 3
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const OnBoarding3()),
+      );
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Terjadi kesalahan. Periksa koneksi Anda.';
+        _isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -146,9 +205,7 @@ class _OnBoarding2State extends State<OnBoarding2> {
                 padding: const EdgeInsets.fromLTRB(25, 30, 25, 20),
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(32),
-                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                 ),
                 child: SingleChildScrollView(
                   child: Column(
@@ -163,8 +220,11 @@ class _OnBoarding2State extends State<OnBoarding2> {
                               color: primaryColor.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Icon(Icons.menu_book_outlined,
-                                size: 16, color: primaryColor),
+                            child: Icon(
+                              Icons.menu_book_outlined,
+                              size: 16,
+                              color: primaryColor,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Text(
@@ -196,8 +256,11 @@ class _OnBoarding2State extends State<OnBoarding2> {
                                 color: Colors.grey,
                               ),
                             ),
-                            icon: const Icon(Icons.keyboard_arrow_down,
-                                color: Colors.grey, size: 20),
+                            icon: const Icon(
+                              Icons.keyboard_arrow_down,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
                             isExpanded: true,
                             items: _educationList.map((String value) {
                               return DropdownMenuItem<String>(
@@ -211,11 +274,14 @@ class _OnBoarding2State extends State<OnBoarding2> {
                                 ),
                               );
                             }).toList(),
-                            onChanged: (String? newValue) {
-                              setState(() {
-                                _selectedEducation = newValue;
-                              });
-                            },
+                            onChanged: _isLoading
+                                ? null
+                                : (String? newValue) {
+                                    setState(() {
+                                      _selectedEducation = newValue;
+                                      _errorMessage = null;
+                                    });
+                                  },
                           ),
                         ),
                       ),
@@ -231,8 +297,11 @@ class _OnBoarding2State extends State<OnBoarding2> {
                               color: primaryColor.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Icon(Icons.work_outline,
-                                size: 16, color: primaryColor),
+                            child: Icon(
+                              Icons.work_outline,
+                              size: 16,
+                              color: primaryColor,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Text(
@@ -247,34 +316,40 @@ class _OnBoarding2State extends State<OnBoarding2> {
                       ),
                       const SizedBox(height: 10),
 
-                      // PILIHAN TOMBOL JENIS PEKERJAAN (Part-time, Magang, Kontrak)
+                      // PILIHAN JENIS PEKERJAAN (mengikuti daftar database)
                       Row(
                         children: [
-                          _buildJobTypeChip('Part-time', Icons.work_outline),
-                          const SizedBox(width: 8),
-                          _buildJobTypeChip('Magang', Icons.person_outline),
-                          const SizedBox(width: 8),
-                          _buildJobTypeChip('Kontrak', Icons.description_outlined),
+                          for (
+                            var i = 0;
+                            i < JobOptions.jobTypes.length;
+                            i++
+                          ) ...[
+                            if (i > 0) const SizedBox(width: 8),
+                            _buildJobTypeChip(JobOptions.jobTypes[i]),
+                          ],
                         ],
                       ),
 
-                      const SizedBox(height: 30),
+                      // PESAN ERROR (hanya muncul jika ada)
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          _errorMessage!,
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ] else
+                        const SizedBox(height: 30),
 
                       // TOMBOL LANJUTKAN
-                    // TOMBOL LANJUTKAN
                       SizedBox(
                         width: double.infinity,
                         height: 45,
                         child: ElevatedButton(
-                          onPressed: () {
-                            // Navigasi ke OnBoarding 2
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const OnBoarding3(), // Pastikan nama class-nya sesuai
-                              ),
-                            );
-                          },
+                          onPressed: _isLoading ? null : _next,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF2862E8),
                             foregroundColor: Colors.white,
@@ -283,13 +358,22 @@ class _OnBoarding2State extends State<OnBoarding2> {
                               borderRadius: BorderRadius.circular(24),
                             ),
                           ),
-                          child: Text(
-                            'Lanjutkan',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  'Lanjutkan',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
                         ),
                       ),
                     ],
@@ -303,24 +387,30 @@ class _OnBoarding2State extends State<OnBoarding2> {
     );
   }
 
-  // Widget helper untuk membuat chip pilihan jenis pekerjaan
-  Widget _buildJobTypeChip(String title, IconData icon) {
-    bool isSelected = _selectedJobTypes.contains(title);
+  // Widget helper untuk membuat chip pilihan jenis pekerjaan.
+  // [value] adalah nilai database; yang tampil adalah labelnya
+  // (Internship tampil sebagai "Magang").
+  Widget _buildJobTypeChip(String value) {
+    final bool isSelected = _selectedJobTypes.contains(value);
     return Expanded(
       child: GestureDetector(
-        onTap: () {
-          setState(() {
-            if (isSelected) {
-              _selectedJobTypes.remove(title);
-            } else {
-              _selectedJobTypes.add(title);
-            }
-          });
-        },
+        onTap: _isLoading
+            ? null
+            : () {
+                setState(() {
+                  if (isSelected) {
+                    _selectedJobTypes.remove(value);
+                  } else {
+                    _selectedJobTypes.add(value);
+                  }
+                });
+              },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? primaryColor.withOpacity(0.05) : Colors.transparent,
+            color: isSelected
+                ? primaryColor.withOpacity(0.05)
+                : Colors.transparent,
             border: Border.all(
               color: isSelected ? primaryColor : Colors.grey.shade300,
               width: isSelected ? 1.5 : 1,
@@ -331,13 +421,16 @@ class _OnBoarding2State extends State<OnBoarding2> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                icon,
+                _iconFor(value),
                 color: isSelected ? primaryColor : Colors.grey,
                 size: 16,
               ),
               const SizedBox(height: 4),
               Text(
-                title,
+                JobTypeLabels.of(value),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                   fontSize: 11,
                   fontWeight: FontWeight.w500,

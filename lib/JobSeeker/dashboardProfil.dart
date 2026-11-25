@@ -1,18 +1,113 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/models/user_model.dart';
+import 'package:sprint/services/auth_service.dart';
+import 'package:sprint/services/avatar_service.dart';
+import 'package:sprint/services/user_service.dart';
 import 'editProfil.dart';
 import 'editCvProfil.dart';
 import 'statusLamaran.dart';
-import 'login.dart'; // Pastikan file halaman login kamu sudah di-import (sesuaikan nama file login-mu jika berbeda, mis. login.dart)
+import 'login.dart';
+import 'package:sprint/services/cv_service.dart';
 
-class DashboardProfil extends StatelessWidget {
+class DashboardProfil extends StatefulWidget {
   const DashboardProfil({super.key});
 
+  @override
+  State<DashboardProfil> createState() => _DashboardProfilState();
+}
+
+class _DashboardProfilState extends State<DashboardProfil> {
+  final AuthService _auth = AuthService();
+  final UserService _users = UserService();
+  final AvatarService _avatars = AvatarService();
+  final CvService _cvs = CvService();
+  String? _cvName;
+  UserModel? _profile;
+  String? _photoUrl;
+  bool _isLoading = true;
+  bool _isLoggingOut = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      final profile = await _users.getCurrentProfile();
+      // Foto dibaca lewat signed URL (bucket private), berlaku 1 jam.
+      final url = await _avatars.signedUrl(profile?.photo);
+      String? cvName;
+      try {
+        final cvs = await _cvs.getMyCvs();
+        if (cvs.isNotEmpty) cvName = cvs.first.fileName;
+      } catch (_) {
+        // Nama CV kosong tidak menghalangi profil.
+      }
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+        _photoUrl = url;
+        _cvName = cvName;
+        _isLoading = false;
+      });
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Gagal memuat profil. Periksa koneksi Anda.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _logout() async {
+    if (_isLoggingOut) return;
+    _isLoggingOut = true;
+    try {
+      await _auth.signOut();
+      if (!mounted) return;
+      // Menghapus semua riwayat halaman dan kembali ke halaman Login
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const Login()),
+        (route) => false,
+      );
+    } on AppException catch (e) {
+      _isLoggingOut = false;
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).maybePop();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      _isLoggingOut = false;
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).maybePop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logout gagal. Silakan coba lagi.')),
+      );
+    }
+  }
+
   // Fungsi untuk menampilkan Pop-up Dialog Logout
-  void _showLogoutDialog(BuildContext context) {
+  void _showLogoutDialog() {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return Dialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
@@ -65,16 +160,7 @@ class DashboardProfil extends StatelessWidget {
                     // Tombol Merah (Logout ke halaman Login)
                     Expanded(
                       child: ElevatedButton(
-                        onPressed: () {
-                          // Menghapus semua riwayat halaman dan kembali ke halaman Login
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const Login(), // Sesuaikan dengan nama class halaman loginmu
-                            ),
-                            (route) => false,
-                          );
-                        },
+                        onPressed: _logout,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFF4D4F),
                           elevation: 0,
@@ -99,7 +185,7 @@ class DashboardProfil extends StatelessWidget {
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () {
-                          Navigator.pop(context); // Menutup dialog
+                          Navigator.pop(dialogContext); // Menutup dialog
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF3B5B9D),
@@ -127,6 +213,42 @@ class DashboardProfil extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Foto bawaan (aset lokal) jika belum ada foto atau gagal dimuat.
+  Widget _photoFallback() {
+    return Image.asset(
+      'assets/profil.png',
+      width: 60,
+      height: 60,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          width: 60,
+          height: 60,
+          color: Colors.grey.shade300,
+          child: const Icon(Icons.person, size: 30, color: Colors.white),
+        );
+      },
+    );
+  }
+
+  Widget _buildPhoto() {
+    final url = _photoUrl;
+    if (url == null) return _photoFallback();
+    return Image.network(
+      url,
+      width: 60,
+      height: 60,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => _photoFallback(),
+    );
+  }
+
+  String _placeholder(String? value, String empty) {
+    if (_isLoading) return '...';
+    final v = value?.trim();
+    return (v == null || v.isEmpty) ? empty : v;
   }
 
   @override
@@ -162,11 +284,12 @@ class DashboardProfil extends StatelessWidget {
                     ),
                     child: IconButton(
                       padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.logout_rounded, color: Color.fromARGB(255, 236, 5, 5), size: 20),
-                      onPressed: () {
-                        // Memanggil fungsi dialog pop-up logout di atas
-                        _showLogoutDialog(context);
-                      },
+                      icon: const Icon(
+                        Icons.logout_rounded,
+                        color: Color.fromARGB(255, 236, 5, 5),
+                        size: 20,
+                      ),
+                      onPressed: _showLogoutDialog,
                     ),
                   ),
                 ],
@@ -190,20 +313,7 @@ class DashboardProfil extends StatelessWidget {
                     // Foto Profil
                     ClipRRect(
                       borderRadius: BorderRadius.circular(14),
-                      child: Image.asset(
-                        'assets/profil.png',
-                        width: 60,
-                        height: 60,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            width: 60,
-                            height: 60,
-                            color: Colors.grey.shade300,
-                            child: const Icon(Icons.person, size: 30, color: Colors.white),
-                          );
-                        },
-                      ),
+                      child: _buildPhoto(),
                     ),
                     const SizedBox(width: 14),
                     // Nama & Info
@@ -212,33 +322,57 @@ class DashboardProfil extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Aqeela Calista',
+                            _placeholder(_profile?.name, '-'),
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              const Icon(Icons.school_outlined, size: 13, color: Colors.white70),
+                              const Icon(
+                                Icons.school_outlined,
+                                size: 13,
+                                color: Colors.white70,
+                              ),
                               const SizedBox(width: 4),
-                              Text(
-                                'Fresh Graduate',
-                                style: GoogleFonts.poppins(fontSize: 12, color: Colors.white70),
+                              Expanded(
+                                child: Text(
+                                  _placeholder(
+                                    _profile?.education,
+                                    'Pendidikan belum diisi',
+                                  ),
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.white70,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 2),
                           Row(
                             children: [
-                              const Icon(Icons.location_on_outlined, size: 13, color: Colors.white70),
+                              const Icon(
+                                Icons.location_on_outlined,
+                                size: 13,
+                                color: Colors.white70,
+                              ),
                               const SizedBox(width: 4),
                               Expanded(
                                 child: Text(
-                                  'Malang, Jl. Kencana',
-                                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.white70),
+                                  _placeholder(
+                                    _profile?.location,
+                                    'Alamat belum diisi',
+                                  ),
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.white70,
+                                  ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -249,20 +383,55 @@ class DashboardProfil extends StatelessWidget {
                     ),
                     // Ikon Edit Profil
                     IconButton(
-                      icon: const Icon(Icons.edit_outlined, color: Color.fromARGB(255, 255, 255, 255), size: 20),
-                      onPressed: () {
-                        Navigator.push(
+                      icon: const Icon(
+                        Icons.edit_outlined,
+                        color: Color.fromARGB(255, 255, 255, 255),
+                        size: 20,
+                      ),
+                      onPressed: () async {
+                        await Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) => const EditProfil(),
                           ),
                         );
+                        // Muat ulang agar perubahan dari halaman edit tampil.
+                        if (mounted) _load();
                       },
                     ),
                   ],
                 ),
               ),
             ),
+
+            // PESAN ERROR MEMUAT PROFIL (hanya muncul jika gagal)
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 10, 24, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _errorMessage!,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _load,
+                      child: Text(
+                        'Coba lagi',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
             const SizedBox(height: 20),
 
@@ -281,24 +450,40 @@ class DashboardProfil extends StatelessWidget {
                         color: Colors.white.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(Icons.description_outlined, color: Colors.white, size: 22),
+                      child: const Icon(
+                        Icons.description_outlined,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
                     title: Text(
                       'CV / Resume',
-                      style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
                     ),
                     subtitle: Text(
-                      'CV_User.pdf',
-                      style: GoogleFonts.poppins(fontSize: 12, color: Colors.white70),
+                      _isLoading ? '...' : (_cvName ?? 'Belum ada CV'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
                     ),
-                    trailing: const Icon(Icons.chevron_right, color: Colors.white70),
-                    onTap: () {
-                      Navigator.push(
+                    trailing: const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white70,
+                    ),
+                    onTap: () async {
+                      await Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (context) => const EditCvProfil(),
                         ),
                       );
+                      // Muat ulang agar nama CV terbaru tampil.
+                      if (mounted) _load();
                     },
                   ),
                   const Divider(color: Colors.white24, height: 20),
@@ -313,17 +498,31 @@ class DashboardProfil extends StatelessWidget {
                         color: Colors.white.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(Icons.assignment_outlined, color: Colors.white, size: 22),
+                      child: const Icon(
+                        Icons.assignment_outlined,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
                     title: Text(
                       'Status lamaran',
-                      style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
                     ),
                     subtitle: Text(
                       'Status lamaran',
-                      style: GoogleFonts.poppins(fontSize: 12, color: Colors.white70),
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
                     ),
-                    trailing: const Icon(Icons.chevron_right, color: Colors.white70),
+                    trailing: const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white70,
+                    ),
                     onTap: () {
                       Navigator.push(
                         context,
@@ -359,7 +558,11 @@ class DashboardProfil extends StatelessWidget {
                       const SnackBar(content: Text('Share profile diklik!')),
                     );
                   },
-                  icon: const Icon(Icons.share_outlined, color: Colors.black87, size: 20),
+                  icon: const Icon(
+                    Icons.share_outlined,
+                    color: Colors.black87,
+                    size: 20,
+                  ),
                   label: Text(
                     'Share profile',
                     style: GoogleFonts.poppins(

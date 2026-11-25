@@ -1,26 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/models/job_filter.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/profile_options.dart';
 
 class FilterLowongan extends StatefulWidget {
-  const FilterLowongan({super.key});
+  const FilterLowongan({super.key, this.initial = const JobFilter()});
+
+  /// Filter yang sedang aktif di halaman pencarian.
+  final JobFilter initial;
 
   @override
   State<FilterLowongan> createState() => _FilterLowonganState();
 }
 
 class _FilterLowonganState extends State<FilterLowongan> {
-  final TextEditingController _keywordController = TextEditingController();
-  final TextEditingController _locationController = TextEditingController();
+  late final TextEditingController _keywordController;
 
-  // Menyimpan status pilihan kota / jenis pekerjaan yang sedang aktif
-  String? _selectedLocationType = 'Malang'; 
+  // Filter utama: satu lokasi dan satu jenis pekerjaan (null = semua).
+  String? _selectedLocation;
+  String? _selectedJobType;
 
-  final List<String> _locations = ['Surabaya', 'Malang', 'Pasuruan'];
+  @override
+  void initState() {
+    super.initState();
+    _keywordController = TextEditingController(
+      text: widget.initial.keyword ?? '',
+    );
+    _selectedLocation = widget.initial.location;
+    _selectedJobType = widget.initial.jobType;
+  }
 
   @override
   void dispose() {
     _keywordController.dispose();
-    _locationController.dispose();
     super.dispose();
   }
 
@@ -28,14 +41,62 @@ class _FilterLowonganState extends State<FilterLowongan> {
   void _resetFilter() {
     setState(() {
       _keywordController.clear();
-      _locationController.clear();
-      _selectedLocationType = null;
+      _selectedLocation = null;
+      _selectedJobType = null;
     });
+  }
+
+  void _apply() {
+    final keyword = _keywordController.text.trim();
+    Navigator.pop(
+      context,
+      JobFilter(
+        keyword: keyword.isEmpty ? null : keyword,
+        location: _selectedLocation,
+        jobType: _selectedJobType,
+      ),
+    );
+  }
+
+  Widget _buildChips({
+    required List<String> values,
+    required String? selected,
+    required String Function(String) label,
+    required void Function(String?) onChanged,
+    required Color primaryColor,
+  }) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: values.map((value) {
+        final isSelected = selected == value;
+        return ChoiceChip(
+          label: Text(label(value)),
+          labelStyle: GoogleFonts.poppins(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: isSelected ? Colors.white : primaryColor,
+          ),
+          selected: isSelected,
+          selectedColor: primaryColor,
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: primaryColor, width: 1),
+          ),
+          onSelected: (isNowSelected) {
+            setState(() => onChanged(isNowSelected ? value : null));
+          },
+        );
+      }).toList(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final Color primaryColor = const Color(0xFF2862E8); // Warna biru tombol/tema
+    final Color primaryColor = const Color(
+      0xFF2862E8,
+    ); // Warna biru tombol/tema
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -100,8 +161,10 @@ class _FilterLowonganState extends State<FilterLowongan> {
                 ),
                 child: TextField(
                   controller: _keywordController,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _apply(),
                   decoration: InputDecoration(
-                    hintText: 'Cari HRD, Lowongan, atau Perusahaan',
+                    hintText: 'Cari lowongan atau keahlian',
                     hintStyle: GoogleFonts.poppins(
                       fontSize: 12,
                       color: Colors.grey.shade400,
@@ -119,7 +182,7 @@ class _FilterLowonganState extends State<FilterLowongan> {
 
               const SizedBox(height: 20),
 
-              // 3. LOKASI
+              // 3. LOKASI (satu pilihan)
               Text(
                 'Lokasi',
                 style: GoogleFonts.plusJakartaSans(
@@ -128,35 +191,18 @@ class _FilterLowonganState extends State<FilterLowongan> {
                   color: Colors.black87,
                 ),
               ),
-              const SizedBox(height: 8),
-              Container(
-                height: 48,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: TextField(
-                  controller: _locationController,
-                  decoration: InputDecoration(
-                    hintText: 'Semua Kota',
-                    hintStyle: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey.shade400,
-                    ),
-                    prefixIcon: Icon(
-                      Icons.location_on_outlined,
-                      color: Colors.grey.shade400,
-                      size: 20,
-                    ),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
+              const SizedBox(height: 12),
+              _buildChips(
+                values: JobOptions.locations,
+                selected: _selectedLocation,
+                label: (v) => v,
+                onChanged: (v) => _selectedLocation = v,
+                primaryColor: primaryColor,
               ),
 
               const SizedBox(height: 20),
 
-              // 4. JENIS PEKERJAAN (CHIP PILIHAN KOTA)
+              // 4. JENIS PEKERJAAN (satu pilihan)
               Text(
                 'Jenis Pekerjaan',
                 style: GoogleFonts.plusJakartaSans(
@@ -166,36 +212,12 @@ class _FilterLowonganState extends State<FilterLowongan> {
                 ),
               ),
               const SizedBox(height: 12),
-              Row(
-                children: _locations.map((loc) {
-                  final isSelected = _selectedLocationType == loc;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: ChoiceChip(
-                      label: Text(loc),
-                      labelStyle: GoogleFonts.poppins(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: isSelected ? Colors.white : primaryColor,
-                      ),
-                      selected: isSelected,
-                      selectedColor: primaryColor,
-                      backgroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        side: BorderSide(
-                          color: primaryColor,
-                          width: 1,
-                        ),
-                      ),
-                      onSelected: (selected) {
-                        setState(() {
-                          _selectedLocationType = selected ? loc : null;
-                        });
-                      },
-                    ),
-                  );
-                }).toList(),
+              _buildChips(
+                values: JobOptions.jobTypes,
+                selected: _selectedJobType,
+                label: JobTypeLabels.of,
+                onChanged: (v) => _selectedJobType = v,
+                primaryColor: primaryColor,
               ),
 
               const Spacer(),
@@ -205,10 +227,7 @@ class _FilterLowonganState extends State<FilterLowongan> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () {
-                    // Aksi ketika tombol FILTER ditekan (kembali ke halaman sebelumnya)
-                    Navigator.pop(context);
-                  },
+                  onPressed: _apply,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: Colors.white,

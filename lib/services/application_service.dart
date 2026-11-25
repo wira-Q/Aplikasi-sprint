@@ -13,7 +13,7 @@ class ApplicationService {
   final SupabaseClient _client;
 
   static const String _seekerSelect =
-      '*, jobs(title, location, job_type, companies(company_name))';
+      '*, jobs(title, location, job_type, companies(company_name, logo))';
   static const String _recruiterSelect =
       '*, users(name, email, phone, education, location), '
       'cvs(file_name, file_size, file_url), jobs(title, location)';
@@ -62,6 +62,29 @@ class ApplicationService {
     } catch (e) {
       _log('apply error: ${e.runtimeType}');
       throw const AppException('Gagal mengirim lamaran. Periksa koneksi Anda.');
+    }
+  }
+
+  /// Apakah pengguna yang login sudah melamar lowongan ini. Dipakai untuk
+  /// menonaktifkan tombol "Lamar" sebelum ditekan. Database tetap menolak
+  /// lamaran ganda (UNIQUE id_user, id_job) walaupun pemeriksaan ini dilewati.
+  Future<bool> hasApplied(int idJob) async {
+    final uid = _requireUid();
+    try {
+      final row = await _client
+          .from('applications')
+          .select('id_application')
+          .eq('id_job', idJob)
+          .eq('id_user', uid)
+          .maybeSingle();
+      return row != null;
+    } on PostgrestException catch (e) {
+      throw mapPostgrestError(e);
+    } catch (e) {
+      _log('hasApplied error: ${e.runtimeType}');
+      throw const AppException(
+        'Gagal memeriksa lamaran. Periksa koneksi Anda.',
+      );
     }
   }
 

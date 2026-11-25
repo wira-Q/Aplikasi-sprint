@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/models/profile_options.dart';
+import 'package:sprint/services/user_service.dart';
 import 'onBoarding2.dart';
 
 class OnBoarding1 extends StatefulWidget {
@@ -13,22 +16,87 @@ class _OnBoarding1State extends State<OnBoarding1> {
   // Mengatur warna utama halaman
   final Color primaryColor = const Color(0xFF203F8B);
 
+  final UserService _users = UserService();
+
   // State untuk menyimpan pilihan jenis kelamin ('laki-laki' atau 'perempuan')
   String _selectedGender = 'laki-laki';
 
   // State untuk menyimpan tanggal lahir yang dipilih
   DateTime? _selectedDate;
 
+  bool _isLoading = false;
+  String? _errorMessage;
+
   Future<void> _selectDate(BuildContext context) async {
+    // Rentang usia 15 sampai 80 tahun, sama dengan aturan di database.
+    final now = DateTime.now();
+    final latest = DateTime(now.year - ProfileRules.minAge, now.month, now.day);
+    final earliest = DateTime(
+      now.year - ProfileRules.maxAge,
+      now.month,
+      now.day,
+    );
+
+    var initial = _selectedDate ?? DateTime(now.year - 25, now.month, now.day);
+    if (initial.isAfter(latest)) initial = latest;
+    if (initial.isBefore(earliest)) initial = earliest;
+
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: DateTime(2000),
-      firstDate: DateTime(1950),
-      lastDate: DateTime.now(),
+      initialDate: initial,
+      firstDate: earliest,
+      lastDate: latest,
     );
     if (picked != null && picked != _selectedDate) {
       setState(() {
         _selectedDate = picked;
+        _errorMessage = null;
+      });
+    }
+  }
+
+  Future<void> _next() async {
+    if (_isLoading) return;
+
+    final date = _selectedDate;
+    if (date == null) {
+      setState(() => _errorMessage = 'Pilih tanggal lahir terlebih dahulu.');
+      return;
+    }
+    final dateError = ProfileRules.validateBirthDate(date);
+    if (dateError != null) {
+      setState(() => _errorMessage = dateError);
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await _users.updateProfile(
+        birthDate: date,
+        gender: _selectedGender == 'perempuan' ? 'Perempuan' : 'Laki-laki',
+      );
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // Navigasi ke OnBoarding 2
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const OnBoarding2()),
+      );
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Terjadi kesalahan. Periksa koneksi Anda.';
+        _isLoading = false;
       });
     }
   }
@@ -46,11 +114,16 @@ class _OnBoarding1State extends State<OnBoarding1> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Tombol Kembali
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
-                  ),
+                  // Tombol Kembali (hanya tampil jika ada halaman sebelumnya)
+                  Navigator.canPop(context)
+                      ? IconButton(
+                          icon: const Icon(
+                            Icons.arrow_back,
+                            color: Colors.white,
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                        )
+                      : const SizedBox(width: 48, height: 48),
                   // Indikator Halaman 01 / 03
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -109,7 +182,7 @@ class _OnBoarding1State extends State<OnBoarding1> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Ikon Roket (atau ganti dengan Image.asset jika menggunakan asset gambar roket)
+                      // Ikon Roket
                       const Icon(
                         Icons.rocket_launch_outlined,
                         size: 70,
@@ -152,9 +225,7 @@ class _OnBoarding1State extends State<OnBoarding1> {
                 padding: const EdgeInsets.fromLTRB(25, 30, 25, 20),
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(32),
-                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                 ),
                 child: SingleChildScrollView(
                   child: Column(
@@ -169,8 +240,11 @@ class _OnBoarding1State extends State<OnBoarding1> {
                               color: primaryColor.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Icon(Icons.calendar_today,
-                                size: 16, color: primaryColor),
+                            child: Icon(
+                              Icons.calendar_today,
+                              size: 16,
+                              color: primaryColor,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Text(
@@ -187,10 +261,12 @@ class _OnBoarding1State extends State<OnBoarding1> {
 
                       // INPUT / DROPDOWN TANGGAL LAHIR
                       GestureDetector(
-                        onTap: () => _selectDate(context),
+                        onTap: _isLoading ? null : () => _selectDate(context),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
                           decoration: BoxDecoration(
                             border: Border.all(color: primaryColor),
                             borderRadius: BorderRadius.circular(12),
@@ -209,8 +285,11 @@ class _OnBoarding1State extends State<OnBoarding1> {
                                       : Colors.black,
                                 ),
                               ),
-                              const Icon(Icons.keyboard_arrow_down,
-                                  color: Colors.grey, size: 20),
+                              const Icon(
+                                Icons.keyboard_arrow_down,
+                                color: Colors.grey,
+                                size: 20,
+                              ),
                             ],
                           ),
                         ),
@@ -227,8 +306,11 @@ class _OnBoarding1State extends State<OnBoarding1> {
                               color: primaryColor.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Icon(Icons.person_outline,
-                                size: 16, color: primaryColor),
+                            child: Icon(
+                              Icons.person_outline,
+                              size: 16,
+                              color: primaryColor,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Text(
@@ -248,14 +330,17 @@ class _OnBoarding1State extends State<OnBoarding1> {
                         children: [
                           Expanded(
                             child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedGender = 'laki-laki';
-                                });
-                              },
+                              onTap: _isLoading
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _selectedGender = 'laki-laki';
+                                      });
+                                    },
                               child: Container(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 decoration: BoxDecoration(
                                   color: _selectedGender == 'laki-laki'
                                       ? primaryColor.withOpacity(0.05)
@@ -264,8 +349,9 @@ class _OnBoarding1State extends State<OnBoarding1> {
                                     color: _selectedGender == 'laki-laki'
                                         ? primaryColor
                                         : Colors.grey.shade300,
-                                    width:
-                                        _selectedGender == 'laki-laki' ? 1.5 : 1,
+                                    width: _selectedGender == 'laki-laki'
+                                        ? 1.5
+                                        : 1,
                                   ),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
@@ -298,14 +384,17 @@ class _OnBoarding1State extends State<OnBoarding1> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedGender = 'perempuan';
-                                });
-                              },
+                              onTap: _isLoading
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _selectedGender = 'perempuan';
+                                      });
+                                    },
                               child: Container(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 decoration: BoxDecoration(
                                   color: _selectedGender == 'perempuan'
                                       ? primaryColor.withOpacity(0.05)
@@ -314,8 +403,9 @@ class _OnBoarding1State extends State<OnBoarding1> {
                                     color: _selectedGender == 'perempuan'
                                         ? primaryColor
                                         : Colors.grey.shade300,
-                                    width:
-                                        _selectedGender == 'perempuan' ? 1.5 : 1,
+                                    width: _selectedGender == 'perempuan'
+                                        ? 1.5
+                                        : 1,
                                   ),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
@@ -348,23 +438,26 @@ class _OnBoarding1State extends State<OnBoarding1> {
                         ],
                       ),
 
-                      const SizedBox(height: 30),
+                      // PESAN ERROR (hanya muncul jika ada)
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          _errorMessage!,
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ] else
+                        const SizedBox(height: 30),
 
-                      // TOMBOL LANJUTKAN
                       // TOMBOL LANJUTKAN
                       SizedBox(
                         width: double.infinity,
                         height: 45,
                         child: ElevatedButton(
-                          onPressed: () {
-                            // Navigasi ke OnBoarding 2
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const OnBoarding2(), // Pastikan nama class-nya sesuai
-                              ),
-                            );
-                          },
+                          onPressed: _isLoading ? null : _next,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF2862E8),
                             foregroundColor: Colors.white,
@@ -373,13 +466,22 @@ class _OnBoarding1State extends State<OnBoarding1> {
                               borderRadius: BorderRadius.circular(24),
                             ),
                           ),
-                          child: Text(
-                            'Lanjutkan',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  'Lanjutkan',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
                         ),
                       ),
                     ],

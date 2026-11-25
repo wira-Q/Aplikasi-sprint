@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sprint/JobSeeker/main_navigation.dart';
-import 'dashboard.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/services/user_service.dart';
 
 class OnBoarding3 extends StatefulWidget {
   const OnBoarding3({super.key});
@@ -14,14 +16,68 @@ class _OnBoarding3State extends State<OnBoarding3> {
   // Mengatur warna utama halaman
   final Color primaryColor = const Color(0xFF203F8B);
 
+  final UserService _users = UserService();
+  final TextEditingController _searchController = TextEditingController();
+
   // State untuk menyimpan daftar lokasi yang dipilih
   final Set<String> _selectedLocations = {'Surabaya'};
 
-  // Daftar lokasi populer
-  final List<String> _popularLocations = ['Malang', 'Surabaya', 'Pasuruhan'];
+  // Daftar lokasi (sama dengan aturan di database: Malang, Surabaya, Pasuruan)
+  final List<String> _popularLocations = JobOptions.locations;
+
+  String _query = '';
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _finish() async {
+    if (_isLoading) return;
+
+    if (_selectedLocations.isEmpty) {
+      setState(() => _errorMessage = 'Pilih minimal satu lokasi.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await _users.updatePreferences(locations: _selectedLocations.toList());
+      if (!mounted) return;
+      // Onboarding selesai: hapus seluruh riwayat halaman, lalu ke beranda.
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const MainNavigation()),
+        (route) => false,
+      );
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Terjadi kesalahan. Periksa koneksi Anda.';
+        _isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final visibleLocations = _popularLocations
+        .where((l) => l.toLowerCase().contains(_query.toLowerCase().trim()))
+        .toList();
+
     return Scaffold(
       backgroundColor: primaryColor,
       body: SafeArea(
@@ -139,16 +195,17 @@ class _OnBoarding3State extends State<OnBoarding3> {
                 padding: const EdgeInsets.fromLTRB(25, 30, 25, 20),
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(32),
-                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                 ),
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // SEARCH BAR LOKASI
+                      // SEARCH BAR LOKASI (menyaring pilihan di bawahnya)
                       TextField(
+                        controller: _searchController,
+                        enabled: !_isLoading,
+                        onChanged: (value) => setState(() => _query = value),
                         decoration: InputDecoration(
                           hintText: 'Cari kota atau daerah...',
                           hintStyle: GoogleFonts.poppins(
@@ -160,8 +217,9 @@ class _OnBoarding3State extends State<OnBoarding3> {
                             size: 20,
                             color: Colors.grey,
                           ),
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 14),
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 14,
+                          ),
                           filled: true,
                           fillColor: const Color(0xFFF5F6F8),
                           border: OutlineInputBorder(
@@ -195,68 +253,89 @@ class _OnBoarding3State extends State<OnBoarding3> {
                       ),
                       const SizedBox(height: 12),
 
-                      // PILIHAN CHIP LOKASI POPULER
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: _popularLocations.map((location) {
-                          bool isSelected = _selectedLocations.contains(location);
-                          return GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                if (isSelected) {
-                                  _selectedLocations.remove(location);
-                                } else {
-                                  _selectedLocations.add(location);
-                                }
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 18, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? primaryColor.withOpacity(0.05)
-                                    : Colors.transparent,
-                                border: Border.all(
-                                  color: isSelected
-                                      ? primaryColor
-                                      : Colors.grey.shade300,
-                                  width: isSelected ? 1.5 : 1,
+                      // PILIHAN CHIP LOKASI
+                      if (visibleLocations.isEmpty)
+                        Text(
+                          'Lokasi tidak ditemukan. Saat ini tersedia '
+                          '${_popularLocations.join(', ')}.',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.grey,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: visibleLocations.map((location) {
+                            bool isSelected = _selectedLocations.contains(
+                              location,
+                            );
+                            return GestureDetector(
+                              onTap: _isLoading
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        if (isSelected) {
+                                          _selectedLocations.remove(location);
+                                        } else {
+                                          _selectedLocations.add(location);
+                                        }
+                                        _errorMessage = null;
+                                      });
+                                    },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 10,
                                 ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                location,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
+                                decoration: BoxDecoration(
                                   color: isSelected
-                                      ? primaryColor
-                                      : Colors.grey.shade700,
+                                      ? primaryColor.withOpacity(0.05)
+                                      : Colors.transparent,
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? primaryColor
+                                        : Colors.grey.shade300,
+                                    width: isSelected ? 1.5 : 1,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  location,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: isSelected
+                                        ? primaryColor
+                                        : Colors.grey.shade700,
+                                  ),
                                 ),
                               ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
+                            );
+                          }).toList(),
+                        ),
 
-                      const SizedBox(height: 40),
+                      // PESAN ERROR (hanya muncul jika ada)
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          _errorMessage!,
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ] else
+                        const SizedBox(height: 40),
 
                       // TOMBOL LANJUTKAN (SELESAI)
-                     SizedBox(
+                      SizedBox(
                         width: double.infinity,
                         height: 45,
                         child: ElevatedButton(
-                          onPressed: () {
-                            // Navigasi ke halaman Dashboard dan menghapus riwayat onboarding dari stack
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const MainNavigation(), // Pastikan nama class sesuai
-                              ),
-                            );
-                          },
+                          onPressed: _isLoading ? null : _finish,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF2862E8),
                             foregroundColor: Colors.white,
@@ -265,13 +344,22 @@ class _OnBoarding3State extends State<OnBoarding3> {
                               borderRadius: BorderRadius.circular(24),
                             ),
                           ),
-                          child: Text(
-                            'Lanjutkan',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  'Lanjutkan',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
                         ),
                       ),
                     ],

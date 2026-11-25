@@ -1,9 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sprint/core/utils/application_status_style.dart';
+import 'package:sprint/core/widgets/company_logo.dart';
+import 'package:sprint/models/application_model.dart';
 import 'main_navigation.dart';
 
 class SuccessScreen extends StatelessWidget {
-  const SuccessScreen({super.key});
+  const SuccessScreen({super.key, required this.application});
+
+  /// Lamaran yang baru dikirim.
+  final ApplicationModel application;
+
+  String get _statusText => application.status == ApplicationStatus.diproses
+      ? 'Menunggu Review'
+      : ApplicationStatusStyle.label(application.status);
 
   @override
   Widget build(BuildContext context) {
@@ -78,36 +88,36 @@ class SuccessScreen extends StatelessWidget {
                     // Bagian Atas Kartu (Logo & Info Posisi)
                     Row(
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.asset(
-                            'assets/p1.png', // Sesuaikan dengan asset logo perusahaanmu
-                            width: 42,
-                            height: 42,
-                            fit: BoxFit.cover,
-                          ),
+                        CompanyLogo(
+                          path: application.companyLogo,
+                          size: 42,
+                          radius: 10,
                         ),
                         const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'AI Engineering',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                application.jobTitle ?? '-',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'DB Klik',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.white70,
+                              const SizedBox(height: 2),
+                              Text(
+                                application.companyName ?? '-',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.white70,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -127,7 +137,7 @@ class SuccessScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Menunggu Review',
+                      _statusText,
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -139,7 +149,6 @@ class SuccessScreen extends StatelessWidget {
               ),
 
               const Spacer(flex: 2),
-
 
               const SizedBox(height: 20),
 
@@ -155,7 +164,7 @@ class SuccessScreen extends StatelessWidget {
                       MaterialPageRoute(
                         builder: (context) => const MainNavigation(),
                       ),
-                      (route) => false, // Menghapus semua tumpukan halaman sebelumnya
+                      (route) => false,
                     );
                   },
                   style: OutlinedButton.styleFrom(
