@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:sprint/JobSeeker/login.dart';
+import 'package:sprint/JobSeeker/signUp.dart';
 import 'package:sprint/JobSeeker/splashScreen.dart';
 
 import 'config/supabase_config.dart';
@@ -10,6 +12,10 @@ import 'core/utils/interviews_debug_page.dart';
 import 'core/utils/jobs_debug_page.dart';
 import 'core/utils/logo_debug_page.dart';
 import 'core/utils/profile_debug_page.dart';
+import 'recruiter/dasboard_page.dart';
+import 'recruiter/onboarding1_page.dart';
+import 'recruiter/onboarding2_page.dart';
+import 'recruiter/onboarding3_page.dart';
 
 /// Menu uji sementara hanya tampil jika dijalankan dengan:
 /// flutter run --dart-define-from-file=env.json --dart-define=DEBUG_MENU=true
@@ -48,6 +54,16 @@ class SprintApp extends StatelessWidget {
       title: 'Sprint',
       debugShowCheckedModeBanner: false,
       home: home,
+      // Rute bernama yang dipakai halaman recruiter (Navigator.pushNamed).
+      // Login dan register diarahkan ke halaman bersama milik Feriska.
+      routes: {
+        '/login': (context) => const Login(),
+        '/register': (context) => const SignUp(),
+        '/onboarding1': (context) => const Onboarding1Page(),
+        '/onboarding2': (context) => const Onboarding2Page(),
+        '/onboarding3': (context) => const Onboarding3Page(),
+        '/dasboard': (context) => const DashboardPage(),
+      },
     );
   }
 }
