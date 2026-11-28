@@ -1,18 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/date_format_id.dart';
+import 'package:sprint/core/utils/job_display.dart';
+import 'package:sprint/core/widgets/company_logo.dart';
+import 'package:sprint/models/company_model.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/profile_options.dart';
+import 'package:sprint/services/company_service.dart';
+import 'package:sprint/services/job_service.dart';
 
-import 'dasboard_page.dart';
+import 'applicants_page.dart';
+import 'deadline_picker.dart';
 
-// Halaman Detail Lowongan.
-// "Lihat Pelamar" dan "Kelola Lowongan" -> halaman Daftar Pelamar.
+// Halaman Detail Lowongan milik recruiter.
+// "Lihat Pelamar" -> pelamar lowongan ini saja.
+// "Tutup/Buka" -> tutup atau buka kembali. "Ubah Tanggal Tutup" -> perpanjang.
 class DetailLowonganPage extends StatefulWidget {
-  final Map<String, dynamic> job;
-  final String company;
+  final JobModel job;
 
-  const DetailLowonganPage({
-    super.key,
-    required this.job,
-    this.company = 'PT XYZ',
-  });
+  const DetailLowonganPage({super.key, required this.job});
 
   @override
   State<DetailLowonganPage> createState() => _DetailLowonganPageState();
@@ -23,71 +29,223 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
   static const Color _dark = Color(0xFF17233D);
   static const Color _grey = Color(0xFF6B7280);
 
+  final CompanyService _companies = CompanyService();
+  final JobService _jobService = JobService();
+
   int selectedTab = 0;
   static const List<String> _tabs = ['Deskripsi', 'Kualifikasi', 'Perusahaan'];
 
-  // ---------- data dari job ----------
-  String _text(String key, String fallback) {
-    final v = widget.job[key];
-    if (v == null || v.toString().trim().isEmpty) return fallback;
-    return v.toString();
+  late JobModel _job;
+  CompanyModel? _company;
+  String? _companyError;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _job = widget.job;
+    _loadCompany();
   }
 
-  String get title => _text('title', 'Backend Developer');
-  String get location => _text('location', 'Malang');
-  String get type => _text('type', 'Full Time');
-  String get salary => _text('salary', 'Rp 4.000.000- Rp 6.000.000');
-  String get applicants => _text('applicants', '0');
-  String get description => _text(
-        'description',
-        'Bertanggung jawab untuk pengembangan antarmuka pengguna (UI)',
-      );
-
-  List<String> get qualifications {
-    final education = _text('education', 'SI');
-    final experience = _text('experience', '1 tahun');
-    final skills = widget.job['skills'];
-
-    String skillText = 'Java dan Java Scribe';
-    if (skills is List && skills.isNotEmpty) {
-      skillText = skills.join(', ');
+  Future<void> _loadCompany() async {
+    setState(() => _companyError = null);
+    try {
+      final company = await _companies.getMyCompany();
+      if (!mounted) return;
+      setState(() => _company = company);
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() => _companyError = e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _companyError = 'Gagal memuat data perusahaan.');
     }
-
-    return [
-      'Pendidikan minimal $education',
-      'Menguasai $skillText',
-      'Memahami konsep REST API',
-      'Pengalaman minimal $experience (Lebih diutamakan)',
-    ];
   }
 
-  // ---------- navigasi ----------
+  void _snack(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _applyUpdated(JobModel updated) {
+    setState(() {
+      _job = updated.withApplicantCount(_job.applicantCount);
+      _busy = false;
+    });
+  }
+
+  // ---------- navigasi dan aksi ----------
   void _openApplicants() {
-    Navigator.pushAndRemoveUntil(
+    Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => const DashboardPage(initialIndex: 1),
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.white,
+          body: SafeArea(
+            child: ApplicantsPage(
+              idJob: _job.idJob,
+              jobTitle: _job.title,
+              onBack: () => Navigator.pop(context),
+            ),
+          ),
+        ),
       ),
-      (route) => false,
     );
   }
 
+  Future<bool?> _confirm(String title, String message, String ok, bool danger) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              ok,
+              style: TextStyle(color: danger ? Colors.red : _blue),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleStatus() async {
+    if (_busy) return;
+    final job = _job;
+    try {
+      if (job.isOpen) {
+        final ok = await _confirm(
+          'Tutup lowongan?',
+          'Lowongan tidak akan tampil lagi bagi pencari kerja. Data pelamar '
+              'tetap tersimpan.',
+          'Tutup',
+          true,
+        );
+        if (ok != true || !mounted) return;
+        setState(() => _busy = true);
+        _applyUpdated(await _jobService.closeJob(job.idJob));
+        _snack('Lowongan ditutup.');
+        return;
+      }
+
+      DateTime? newDeadline;
+      if (job.isExpired) {
+        final ok = await _confirm(
+          'Buka kembali lowongan?',
+          'Tanggal tutup lowongan ini sudah lewat. Pilih tanggal tutup yang '
+              'baru untuk membukanya kembali.',
+          'Pilih tanggal',
+          false,
+        );
+        if (ok != true || !mounted) return;
+        newDeadline = await pickJobDeadline(
+          context,
+          helpText: 'Tanggal tutup baru',
+        );
+        if (newDeadline == null || !mounted) return;
+      } else {
+        final ok = await _confirm(
+          'Buka kembali lowongan?',
+          'Lowongan akan tampil lagi bagi pencari kerja.',
+          'Buka',
+          false,
+        );
+        if (ok != true || !mounted) return;
+      }
+      setState(() => _busy = true);
+      _applyUpdated(
+        await _jobService.reopenJob(job.idJob, newDeadline: newDeadline),
+      );
+      _snack('Lowongan dibuka kembali.');
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _snack(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _snack('Gagal mengubah status lowongan.');
+    }
+  }
+
+  Future<void> _changeDeadline() async {
+    if (_busy) return;
+    final picked = await pickJobDeadline(context, initial: _job.deadline);
+    if (picked == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      _applyUpdated(await _jobService.updateJob(_job.idJob, deadline: picked));
+      _snack('Tanggal tutup diperbarui: ${DateFormatId.date(picked)}.');
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _snack(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _snack('Gagal menyimpan tanggal tutup.');
+    }
+  }
+
   // ---------- widget ----------
-  Widget _infoItem(IconData icon, String text) {
+  Widget _infoItem(IconData icon, String text, {Color color = _grey}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 12, color: _grey),
+        Icon(icon, size: 12, color: color),
         const SizedBox(width: 4),
-        Text(text, style: const TextStyle(fontSize: 9, color: _grey)),
+        Text(text, style: TextStyle(fontSize: 9, color: color)),
       ],
     );
   }
 
+  Widget _statusBadge() {
+    final job = _job;
+    Color bg;
+    Color fg;
+    String label;
+    if (job.isOpen) {
+      bg = const Color(0xFFD5F7E3);
+      fg = const Color(0xFF4CCB84);
+      label = 'AKTIF';
+    } else if (job.isClosedManually) {
+      bg = const Color(0xFFFFD0D4);
+      fg = Colors.red;
+      label = 'DITUTUP';
+    } else {
+      bg = const Color(0xFFFFEFC2);
+      fg = const Color(0xFFB7791F);
+      label = 'BERAKHIR';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: fg, fontSize: 8, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
   Widget _headerCard() {
+    final job = _job;
+    final salary = JobDisplay.salary(job.salary);
+    final workSystem = job.workSystem?.trim();
+    final deadline = job.deadline;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -98,26 +256,14 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDCE7FF),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.work_outline_rounded,
-                  color: _blue,
-                  size: 22,
-                ),
-              ),
+              CompanyLogo(path: job.companyLogo, size: 40, radius: 8),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      title,
+                      job.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -127,7 +273,7 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
                       ),
                     ),
                     Text(
-                      widget.company,
+                      job.companyName ?? '-',
                       style: const TextStyle(
                         color: _dark,
                         fontSize: 10,
@@ -137,22 +283,7 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
                   ],
                 ),
               ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD5F7E3),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'AKTIF',
-                  style: TextStyle(
-                    color: Color(0xFF4CCB84),
-                    fontSize: 8,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
+              _statusBadge(),
             ],
           ),
           const SizedBox(height: 10),
@@ -160,14 +291,29 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
             spacing: 14,
             runSpacing: 6,
             children: [
-              _infoItem(Icons.location_on_outlined, location),
-              _infoItem(Icons.schedule_rounded, type),
+              _infoItem(Icons.location_on_outlined, job.location),
+              _infoItem(Icons.schedule_rounded, JobTypeLabels.of(job.jobType)),
+              if (workSystem != null && workSystem.isNotEmpty)
+                _infoItem(Icons.home_work_outlined, workSystem),
             ],
           ),
           const SizedBox(height: 6),
-          _infoItem(Icons.monetization_on_rounded, salary),
+          _infoItem(
+            Icons.monetization_on_rounded,
+            salary.isEmpty ? 'Gaji tidak dicantumkan' : salary,
+          ),
           const SizedBox(height: 6),
-          _infoItem(Icons.people_alt_outlined, '$applicants Pelamar'),
+          _infoItem(Icons.people_alt_outlined, '${job.applicantCount} Pelamar'),
+          const SizedBox(height: 6),
+          _infoItem(
+            Icons.event_outlined,
+            deadline == null
+                ? 'Tanpa tanggal tutup'
+                : (job.isExpired
+                      ? 'Berakhir ${DateFormatId.date(deadline)}'
+                      : 'Ditutup ${DateFormatId.date(deadline)}'),
+            color: job.isExpired ? Colors.red : _grey,
+          ),
         ],
       ),
     );
@@ -232,7 +378,7 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
       children: [
         _heading('Deskripsi Pekerjaan'),
         Text(
-          description,
+          _job.description,
           style: const TextStyle(color: _dark, fontSize: 11, height: 1.5),
         ),
       ],
@@ -240,31 +386,46 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
   }
 
   Widget _qualificationSection() {
+    final education = _job.education?.trim();
+    final items = <String>[
+      if (education != null && education.isNotEmpty)
+        'Pendidikan minimal $education',
+      ...JobDisplay.skillList(_job.skills),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _heading('Kualifikasi'),
-        ...qualifications.map(
-          (q) => Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('•  ', style: TextStyle(fontSize: 11, color: _grey)),
-                Expanded(
-                  child: Text(
-                    q,
-                    style: const TextStyle(
-                      color: _grey,
-                      fontSize: 11,
-                      height: 1.4,
+        if (items.isEmpty)
+          const Text(
+            'Belum ada kualifikasi yang dicantumkan.',
+            style: TextStyle(color: _grey, fontSize: 11),
+          )
+        else
+          ...items.map(
+            (q) => Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '•  ',
+                    style: TextStyle(fontSize: 11, color: _grey),
+                  ),
+                  Expanded(
+                    child: Text(
+                      q,
+                      style: const TextStyle(
+                        color: _grey,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -288,15 +449,35 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
       );
     }
 
+    String valueOf(String? v) =>
+        (v == null || v.trim().isEmpty) ? '-' : v.trim();
+
+    if (_companyError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _companyError!,
+            style: const TextStyle(color: _grey, fontSize: 11),
+          ),
+          TextButton(onPressed: _loadCompany, child: const Text('Coba lagi')),
+        ],
+      );
+    }
+    final c = _company;
+    if (c == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _heading('Tentang Perusahaan'),
-        row(Icons.business, widget.company),
-        row(Icons.category_outlined, 'Teknologi informasi'),
-        row(Icons.location_on_outlined, 'Malang, Jawa Timur'),
-        row(Icons.mail_outline_rounded, 'hr@ptxyz.com'),
-        row(Icons.language_rounded, 'www.ptxyz.com'),
+        row(Icons.business, c.companyName),
+        row(Icons.category_outlined, valueOf(c.industry)),
+        row(Icons.location_on_outlined, valueOf(c.location)),
+        row(Icons.mail_outline_rounded, valueOf(c.email)),
+        row(Icons.language_rounded, valueOf(c.website)),
       ],
     );
   }
@@ -319,8 +500,18 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
     }
   }
 
+  Widget _spinner() => const SizedBox(
+    width: 16,
+    height: 16,
+    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+  );
+
   @override
   Widget build(BuildContext context) {
+    final job = _job;
+    // Lowongan yang berakhir otomatis dibuka lewat "ubah tanggal tutup".
+    final showToggle = job.isOpen || job.isClosedManually;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -374,7 +565,7 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
                         ),
                       ),
                       child: Text(
-                        'Lihat Pelamar [$applicants]',
+                        'Lihat Pelamar [${job.applicantCount}]',
                         style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -386,25 +577,53 @@ class _DetailLowonganPageState extends State<DetailLowonganPage> {
                   SizedBox(
                     width: double.infinity,
                     height: 38,
-                    child: ElevatedButton(
-                      onPressed: _openApplicants,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _blue,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _changeDeadline,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _blue,
+                        side: const BorderSide(color: _blue),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
-                      child: const Text(
-                        'Kelola Lowongan',
-                        style: TextStyle(
+                      child: Text(
+                        job.isExpired
+                            ? 'Perpanjang (Ubah Tanggal Tutup)'
+                            : 'Ubah Tanggal Tutup',
+                        style: const TextStyle(
                           fontSize: 11,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                   ),
+                  if (showToggle) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 38,
+                      child: ElevatedButton(
+                        onPressed: _busy ? null : _toggleStatus,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: job.isOpen ? _blue : Colors.green,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: _busy
+                            ? _spinner()
+                            : Text(
+                                job.isOpen ? 'Tutup Lowongan' : 'Buka Kembali',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

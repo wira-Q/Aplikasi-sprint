@@ -35,6 +35,7 @@ class ApplicationModel {
     this.applicantPhone,
     this.applicantEducation,
     this.applicantLocation,
+    this.applicantPhoto,
     this.cvFileName,
     this.cvFileSize,
     this.cvPath,
@@ -63,6 +64,10 @@ class ApplicationModel {
   final String? applicantPhone;
   final String? applicantEducation;
   final String? applicantLocation;
+
+  /// Path foto di bucket avatars. Ubah jadi URL dengan
+  /// AvatarService.signedUrl.
+  final String? applicantPhoto;
 
   // Dari relasi cvs (sisi recruiter).
   final String? cvFileName;
@@ -100,6 +105,7 @@ class ApplicationModel {
       applicantPhone: user?['phone'] as String?,
       applicantEducation: user?['education'] as String?,
       applicantLocation: user?['location'] as String?,
+      applicantPhoto: user?['photo'] as String?,
       cvFileName: cv?['file_name'] as String?,
       cvFileSize: (cv?['file_size'] as num?)?.toInt(),
       cvPath: cv?['file_url'] as String?,

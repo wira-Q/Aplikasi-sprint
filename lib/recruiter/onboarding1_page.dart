@@ -2,9 +2,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:sprint/recruiter/onboarding_draft.dart';
 
 // Onboarding 1 (1/3): Kenalan dengan perusahaan kamu
-// Upload logo -> membuka galeri.
+// Upload logo -> membuka galeri. Logo baru diunggah di halaman 3.
 class Onboarding1Page extends StatefulWidget {
   const Onboarding1Page({super.key});
 
@@ -19,7 +20,7 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
   static const int _maxLogoBytes = 2 * 1024 * 1024; // 2 MB
 
   final ImagePicker _picker = ImagePicker();
-  final TextEditingController _namaController = TextEditingController();
+  late final TextEditingController _namaController;
 
   Uint8List? _logoBytes;
   String? _logoName;
@@ -36,15 +37,24 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    // Isi ulang dari draf, supaya tombol kembali dari halaman 2 tidak
+    // mengosongkan isian.
+    _namaController = TextEditingController(text: CompanyOnboardingDraft.name);
+    _logoBytes = CompanyOnboardingDraft.logoBytes;
+    _logoName = CompanyOnboardingDraft.logoName;
+    _industri = CompanyOnboardingDraft.industry;
+  }
+
+  @override
   void dispose() {
     _namaController.dispose();
     super.dispose();
   }
 
   void _showMessage(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   // Buka galeri dan pilih logo
@@ -60,12 +70,14 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
 
       final name = file.name.toLowerCase();
       final hasExtension = name.contains('.');
-      final validType = name.endsWith('.jpg') ||
+      final validType =
+          name.endsWith('.jpg') ||
           name.endsWith('.jpeg') ||
-          name.endsWith('.png');
+          name.endsWith('.png') ||
+          name.endsWith('.webp');
 
       if (hasExtension && !validType) {
-        _showMessage('Format logo harus JPG atau PNG');
+        _showMessage('Format logo harus JPG, PNG, atau WebP');
         return;
       }
 
@@ -94,14 +106,24 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
   }
 
   void _lanjut() {
-    if (_namaController.text.trim().isEmpty) {
+    final nama = _namaController.text.trim();
+    if (nama.isEmpty) {
       _showMessage('Nama perusahaan wajib diisi');
+      return;
+    }
+    if (nama.length > 150) {
+      _showMessage('Nama perusahaan terlalu panjang');
       return;
     }
     if (_industri == null) {
       _showMessage('Pilih bidang industri');
       return;
     }
+
+    CompanyOnboardingDraft.name = nama;
+    CompanyOnboardingDraft.industry = _industri;
+    CompanyOnboardingDraft.logoBytes = _logoBytes;
+    CompanyOnboardingDraft.logoName = _logoName;
 
     Navigator.pushNamed(context, '/onboarding2');
   }
@@ -110,11 +132,20 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
   Widget _header() {
     return Row(
       children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: const Icon(Icons.chevron_left, size: 24, color: Colors.black87),
-        ),
-        const SizedBox(width: 14),
+        // Halaman 1 bisa menjadi satu-satunya halaman di tumpukan setelah
+        // login, jadi panah kembali hanya tampil jika memang ada halaman
+        // sebelumnya.
+        if (Navigator.canPop(context)) ...[
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: const Icon(
+              Icons.chevron_left,
+              size: 24,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(width: 14),
+        ],
         Expanded(
           child: Row(
             children: [
@@ -183,8 +214,11 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
             color: Color(0xFFE3ECFE),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.photo_camera_outlined,
-              size: 17, color: _blue),
+          child: const Icon(
+            Icons.photo_camera_outlined,
+            size: 17,
+            color: _blue,
+          ),
         ),
         const SizedBox(height: 10),
         const Text(
@@ -197,7 +231,7 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
         ),
         const SizedBox(height: 4),
         const Text(
-          'JPG, PNG (maks. 2MB)',
+          'JPG, PNG, WebP (maks. 2MB)',
           style: TextStyle(color: Colors.black54, fontSize: 8),
         ),
       ],
@@ -274,7 +308,12 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
             fontWeight: FontWeight.w600,
           ),
           children: required
-              ? const [TextSpan(text: ' *', style: TextStyle(color: Colors.red))]
+              ? const [
+                  TextSpan(
+                    text: ' *',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ]
               : null,
         ),
       ),
@@ -425,7 +464,7 @@ class _Onboarding1PageState extends State<Onboarding1Page> {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      SizedBox(width: 120),
+                      SizedBox(width: 12),
                       Icon(Icons.arrow_forward, size: 16),
                     ],
                   ),
@@ -455,10 +494,7 @@ class _DashedBorderPainter extends CustomPainter {
 
     final path = Path()
       ..addRRect(
-        RRect.fromRectAndRadius(
-          Offset.zero & size,
-          Radius.circular(radius),
-        ),
+        RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius)),
       );
 
     for (final metric in path.computeMetrics()) {

@@ -1,78 +1,102 @@
 import 'package:flutter/material.dart';
+import 'package:sprint/core/utils/date_format_id.dart';
+import 'package:sprint/core/utils/paged_controller.dart';
+import 'package:sprint/core/widgets/page_bar.dart';
+import 'package:sprint/models/application_model.dart';
+import 'package:sprint/services/application_service.dart';
 
 import 'detail_pelamar_page.dart';
+import 'recruiter_theme.dart';
 
-// Halaman Daftar Pelamar (konten saja).
+// Halaman Daftar Pelamar (konten saja), 5 pelamar per halaman.
 // Bottom navigation dipegang oleh DasboardPage.
+// Jika [idJob] diisi, hanya pelamar lowongan itu yang tampil.
 class ApplicantsPage extends StatefulWidget {
-  // Dipanggil saat tombol panah kembali ditekan (balik ke Home).
+  // Dipanggil saat tombol panah kembali ditekan.
   final VoidCallback? onBack;
+  final int? idJob;
+  final String? jobTitle;
 
-  const ApplicantsPage({super.key, this.onBack});
+  const ApplicantsPage({super.key, this.onBack, this.idJob, this.jobTitle});
 
   @override
   State<ApplicantsPage> createState() => _ApplicantsPageState();
 }
 
 class _ApplicantsPageState extends State<ApplicantsPage> {
-  static const Color blue = Color(0xFF2454D3);
-  static const Color textDark = Color(0xFF17233D);
+  static const Color blue = primaryBlue;
+  static const List<String> _filters = [
+    'Semua',
+    'Diproses',
+    'Interview',
+    'Diterima',
+    'Ditolak',
+  ];
+  static const List<Color> _avatarColors = [
+    Colors.brown,
+    Colors.pink,
+    Colors.blueGrey,
+    Colors.teal,
+    Colors.indigo,
+  ];
+
+  final ApplicationService _service = ApplicationService();
+  final ScrollController _scroll = ScrollController();
+  late final PagedController<ApplicationModel> _pager;
 
   String selectedFilter = 'Semua';
 
-  // Taruh foto di assets/images/ lalu daftarkan di pubspec.yaml.
-  // Kalau foto belum ada, otomatis tampil inisial.
-  final List<Map<String, dynamic>> applicants = [
-    {
-      'name': 'Wisnu Nugroho',
-      'position': 'Backend developer',
-      'school': 'SMKN 8 Malang',
-      'major': 'RPL',
-      'status': 'Diproses',
-      'date': 'Sunday, 20 Sept 2026',
-      'time': '13.55 WIB',
-      'photo': 'assets/images/wisnu.jpg',
-      'initial': 'W',
-      'color': Colors.brown,
-    },
-    {
-      'name': 'Dinda Kirana',
-      'position': 'Frontend developer',
-      'school': 'Universitas Bali',
-      'major': 'Teknik Informatika',
-      'status': 'Diterima',
-      'date': '21 Sept 2026,',
-      'time': '11.15 WIB',
-      'photo': 'assets/images/dinda.jpg',
-      'initial': 'D',
-      'color': Colors.pink,
-    },
-    {
-      'name': 'Claudia Tiara',
-      'position': 'Frontend developer',
-      'school': 'SMKN 1 Bandung',
-      'major': 'RPL',
-      'status': 'Ditolak',
-      'date': 'Sunday, 20 Sept 2026',
-      'time': '10.55 WIB',
-      'photo': 'assets/images/claudia.jpg',
-      'initial': 'C',
-      'color': Colors.blueGrey,
-    },
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _pager = PagedController<ApplicationModel>(
+      fetch: (page, size) => _service.getApplicantsPage(
+        idJob: widget.idJob,
+        status: selectedFilter == 'Semua' ? null : selectedFilter,
+        page: page,
+        pageSize: size,
+      ),
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      errorText: 'Gagal memuat pelamar. Periksa koneksi Anda.',
+      onBackgroundError: (message) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      },
+    );
+    _pager.load(page: 0);
+  }
 
-  List<Map<String, dynamic>> get filteredApplicants {
-    if (selectedFilter == 'Semua') return applicants;
-    return applicants.where((a) => a['status'] == selectedFilter).toList();
+  @override
+  void dispose() {
+    _pager.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _goToPage(int page) async {
+    await _pager.goTo(page);
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   Color _statusColor(String status) {
     switch (status) {
-      case 'Diproses':
+      case ApplicationStatus.diproses:
         return const Color(0xFFCFE0FF);
-      case 'Diterima':
+      case ApplicationStatus.interview:
+        return const Color(0xFFFFEFC2);
+      case ApplicationStatus.diterima:
         return const Color(0xFFC9F5DB);
-      case 'Ditolak':
+      case ApplicationStatus.ditolak:
         return const Color(0xFFFFD0D4);
       default:
         return Colors.grey.shade200;
@@ -81,11 +105,13 @@ class _ApplicantsPageState extends State<ApplicantsPage> {
 
   Color _statusTextColor(String status) {
     switch (status) {
-      case 'Diproses':
+      case ApplicationStatus.diproses:
         return blue;
-      case 'Diterima':
+      case ApplicationStatus.interview:
+        return const Color(0xFFB7791F);
+      case ApplicationStatus.diterima:
         return const Color(0xFF159653);
-      case 'Ditolak':
+      case ApplicationStatus.ditolak:
         return Colors.red;
       default:
         return Colors.grey;
@@ -96,7 +122,11 @@ class _ApplicantsPageState extends State<ApplicantsPage> {
     final isSelected = selectedFilter == title;
 
     return GestureDetector(
-      onTap: () => setState(() => selectedFilter = title),
+      onTap: () {
+        if (selectedFilter == title) return;
+        setState(() => selectedFilter = title);
+        _pager.load(page: 0);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
@@ -115,158 +145,221 @@ class _ApplicantsPageState extends State<ApplicantsPage> {
     );
   }
 
-  Widget _avatar(Map<String, dynamic> applicant) {
+  Widget _avatar(ApplicationModel a, int index) {
     return ClipOval(
-      child: SizedBox(
+      child: Container(
         width: 48,
         height: 48,
-        child: Image.asset(
-          applicant['photo'],
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
-              color: applicant['color'],
-              alignment: Alignment.center,
-              child: Text(
-                applicant['initial'],
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-            );
-          },
+        color: _avatarColors[index % _avatarColors.length],
+        alignment: Alignment.center,
+        child: Text(
+          initialsOf(a.applicantName),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
         ),
       ),
     );
   }
 
-  // Buka Detail Pelamar, lalu refresh daftar (status bisa berubah)
-  Future<void> _openDetail(Map<String, dynamic> applicant) async {
+  // Buka Detail Pelamar, lalu muat ulang daftar (status bisa berubah)
+  Future<void> _openDetail(ApplicationModel a) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => DetailPelamarPage(applicant: applicant),
+        builder: (_) => DetailPelamarPage(idApplication: a.idApplication),
       ),
     );
-    if (mounted) setState(() {});
+    if (mounted) _pager.load(spinner: false);
   }
 
-  Widget _applicantCard(Map<String, dynamic> applicant) {
-    final String status = applicant['status'];
+  Widget _applicantCard(ApplicationModel a, int index) {
+    final applied = a.appliedAt;
+    final education = a.applicantEducation?.trim();
+    final city = a.applicantLocation?.trim();
 
     return GestureDetector(
-      onTap: () => _openDetail(applicant),
+      onTap: () => _openDetail(a),
       child: Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFE7EAF0)),
-        borderRadius: BorderRadius.circular(8),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE7EAF0)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            _avatar(a, index),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    a.applicantName ?? '-',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    a.jobTitle ?? '-',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.school_outlined,
+                        size: 12,
+                        color: Colors.black54,
+                      ),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text(
+                          (education == null || education.isEmpty)
+                              ? '-'
+                              : education,
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: Colors.black54,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (city != null && city.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 5),
+                          child: Text(
+                            '•',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ),
+                        Flexible(
+                          child: Text(
+                            city,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              color: Colors.black54,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _statusColor(a.status),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      a.status,
+                      style: TextStyle(
+                        fontSize: 8,
+                        color: _statusTextColor(a.status),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: Colors.black87,
+                ),
+                const SizedBox(height: 14),
+                if (applied != null) ...[
+                  Text(
+                    DateFormatId.date(applied),
+                    style: const TextStyle(fontSize: 7, color: Colors.grey),
+                  ),
+                  Text(
+                    DateFormatId.time(applied),
+                    style: const TextStyle(fontSize: 7, color: Colors.grey),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
       ),
-      child: Row(
-        children: [
-          _avatar(applicant),
-          const SizedBox(width: 10),
-          Expanded(
+    );
+  }
+
+  List<Widget> _buildChildren() {
+    if (_pager.isLoading) {
+      return const [
+        SizedBox(
+          height: 260,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ];
+    }
+    if (_pager.error != null && _pager.items.isEmpty) {
+      return [
+        SizedBox(
+          height: 260,
+          child: Center(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  applicant['name'],
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: textDark,
-                  ),
+                  _pager.error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  applicant['position'],
-                  style: const TextStyle(fontSize: 10, color: Colors.black54),
-                ),
-                const SizedBox(height: 5),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.school_outlined,
-                      size: 12,
-                      color: Colors.black54,
-                    ),
-                    const SizedBox(width: 3),
-                    Flexible(
-                      child: Text(
-                        applicant['school'],
-                        style: const TextStyle(
-                          fontSize: 9,
-                          color: Colors.black54,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 5),
-                      child: Text(
-                        '•',
-                        style: TextStyle(fontSize: 9, color: Colors.black54),
-                      ),
-                    ),
-                    Flexible(
-                      child: Text(
-                        applicant['major'],
-                        style: const TextStyle(
-                          fontSize: 9,
-                          color: Colors.black54,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _statusColor(status),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    status,
-                    style: TextStyle(
-                      fontSize: 8,
-                      color: _statusTextColor(status),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                TextButton(
+                  onPressed: () => _pager.load(),
+                  child: const Text('Coba lagi'),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 6),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.chevron_right, size: 20, color: Colors.black87),
-              const SizedBox(height: 14),
-              Text(
-                applicant['date'],
-                style: const TextStyle(fontSize: 7, color: Colors.grey),
-              ),
-              if ((applicant['time'] as String).isNotEmpty)
-                Text(
-                  applicant['time'],
-                  style: const TextStyle(fontSize: 7, color: Colors.grey),
-                ),
-            ],
+        ),
+      ];
+    }
+    if (_pager.items.isEmpty) {
+      return const [
+        SizedBox(
+          height: 260,
+          child: Center(
+            child: Text(
+              'Belum ada pelamar',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
           ),
-        ],
-      ),
-    ),
-    );
+        ),
+      ];
+    }
+    return [
+      for (var i = 0; i < _pager.items.length; i++)
+        _applicantCard(_pager.items[i], i),
+    ];
   }
 
   @override
@@ -283,46 +376,63 @@ class _ApplicantsPageState extends State<ApplicantsPage> {
                 onPressed: widget.onBack,
                 icon: const Icon(Icons.arrow_back, color: Colors.black87),
               ),
-              const Text(
-                'Daftar Pelamar',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: textDark,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Daftar Pelamar',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: textDark,
+                      ),
+                    ),
+                    if (widget.jobTitle != null)
+                      Text(
+                        widget.jobTitle!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 10, color: textGrey),
+                      ),
+                  ],
                 ),
               ),
             ],
           ),
         ),
         const SizedBox(height: 10),
-        Padding(
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 14),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _filterButton('Semua'),
-              _filterButton('Diproses'),
-              _filterButton('Diterima'),
-              _filterButton('Ditolak'),
+              for (var i = 0; i < _filters.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                _filterButton(_filters[i]),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 20),
         Expanded(
-          child: filteredApplicants.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Belum ada pelamar',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: filteredApplicants.length,
-                  itemBuilder: (context, index) {
-                    return _applicantCard(filteredApplicants[index]);
-                  },
+          child: RefreshIndicator(
+            onRefresh: () => _pager.load(spinner: false),
+            child: ListView(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                ..._buildChildren(),
+                PageBar(
+                  page: _pager.page,
+                  totalPages: _pager.totalPages,
+                  enabled: !_pager.isLoading,
+                  onPageSelected: _goToPage,
                 ),
+              ],
+            ),
+          ),
         ),
       ],
     );

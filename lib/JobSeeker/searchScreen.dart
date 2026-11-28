@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/paged_controller.dart';
 import 'package:sprint/core/widgets/company_logo.dart';
+import 'package:sprint/core/widgets/page_bar.dart';
 import 'package:sprint/models/job_filter.dart';
 import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/paged_result.dart';
 import 'package:sprint/models/profile_options.dart';
 import 'package:sprint/services/job_service.dart';
 import 'filterLowongan.dart';
@@ -19,100 +21,52 @@ class SearchScreen extends StatefulWidget {
 }
 
 class _SearchScreenState extends State<SearchScreen> {
-  static const int _pageSize = 10;
-
   final JobService _jobService = JobService();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scroll = ScrollController();
 
+  late final PagedController<JobModel> _pager;
   Timer? _debounce;
-
-  List<JobModel> _jobs = [];
-  bool _isLoading = true;
-  bool _isLoadingMore = false;
-  bool _hasMore = false;
-  String? _errorMessage;
 
   String _query = '';
   JobFilter _filter = const JobFilter();
-  int _page = 0;
-  int _requestId = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadFirstPage();
+    _pager = PagedController<JobModel>(
+      fetch: _fetch,
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      errorText: 'Gagal memuat lowongan. Periksa koneksi Anda.',
+      onBackgroundError: (message) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      },
+    );
+    _pager.load(page: 0);
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _pager.dispose();
     _searchController.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
-  Future<List<JobModel>> _fetch(int page) {
-    return _jobService.getJobs(
+  Future<PagedResult<JobModel>> _fetch(int page, int size) {
+    return _jobService.getJobsPage(
       query: _query.isEmpty ? null : _query,
       location: _filter.location,
       jobType: _filter.jobType,
       page: page,
-      pageSize: _pageSize,
+      pageSize: size,
     );
-  }
-
-  Future<void> _loadFirstPage() async {
-    final id = ++_requestId;
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _page = 0;
-    });
-    try {
-      final list = await _fetch(0);
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _jobs = list;
-        _hasMore = list.length == _pageSize;
-        _isLoading = false;
-      });
-    } on AppException catch (e) {
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _errorMessage = e.message;
-        _isLoading = false;
-      });
-    } catch (_) {
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _errorMessage = 'Gagal memuat lowongan. Periksa koneksi Anda.';
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _loadMore() async {
-    if (_isLoadingMore || !_hasMore) return;
-    final id = _requestId;
-    setState(() => _isLoadingMore = true);
-    try {
-      final list = await _fetch(_page + 1);
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _page += 1;
-        _jobs = [..._jobs, ...list];
-        _hasMore = list.length == _pageSize;
-        _isLoadingMore = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoadingMore = false);
-      final message = e is AppException
-          ? e.message
-          : 'Gagal memuat lowongan. Periksa koneksi Anda.';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
   }
 
   void _onSearchChanged(String value) {
@@ -122,7 +76,7 @@ class _SearchScreenState extends State<SearchScreen> {
       final query = value.trim();
       if (query == _query) return;
       _query = query;
-      _loadFirstPage();
+      _pager.load(page: 0);
     });
   }
 
@@ -144,7 +98,18 @@ class _SearchScreenState extends State<SearchScreen> {
     _filter = result;
     _query = (result.keyword ?? '').trim();
     _searchController.text = _query;
-    _loadFirstPage();
+    _pager.load(page: 0);
+  }
+
+  Future<void> _goToPage(int page) async {
+    await _pager.goTo(page);
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   @override
@@ -189,7 +154,8 @@ class _SearchScreenState extends State<SearchScreen> {
                                     _debounce?.cancel();
                                     _searchController.clear();
                                     _query = '';
-                                    _loadFirstPage();
+                                    _pager.load(page: 0);
+                                    setState(() {});
                                   },
                                 )
                               : null,
@@ -223,8 +189,25 @@ class _SearchScreenState extends State<SearchScreen> {
 
               const SizedBox(height: 20),
 
-              // 2. LIST KARTU LOWONGAN
-              Expanded(child: _buildContent(primaryColor)),
+              // 2. DAFTAR KARTU LOWONGAN (5 per halaman, tarik untuk memuat ulang)
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: () => _pager.load(spinner: false),
+                  child: ListView(
+                    controller: _scroll,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: _buildChildren(primaryColor),
+                  ),
+                ),
+              ),
+
+              // 3. NOMOR HALAMAN (dipasang tetap di bawah)
+              PageBar(
+                page: _pager.page,
+                totalPages: _pager.totalPages,
+                enabled: !_pager.isLoading,
+                onPageSelected: _goToPage,
+              ),
             ],
           ),
         ),
@@ -232,58 +215,58 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  Widget _buildContent(Color primaryColor) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+  List<Widget> _buildChildren(Color primaryColor) {
+    if (_pager.isLoading) {
+      return const [
+        SizedBox(
+          height: 260,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ];
     }
-    if (_errorMessage != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _errorMessage!,
-              textAlign: TextAlign.center,
+    if (_pager.error != null && _pager.items.isEmpty) {
+      return [
+        SizedBox(
+          height: 260,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _pager.error!,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _pager.load(),
+                  child: const Text('Coba lagi'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_pager.items.isEmpty) {
+      return [
+        SizedBox(
+          height: 260,
+          child: Center(
+            child: Text(
+              'Lowongan tidak ditemukan',
               style: GoogleFonts.poppins(
                 fontSize: 13,
-                color: Colors.grey.shade600,
+                color: Colors.grey.shade500,
               ),
             ),
-            TextButton(
-              onPressed: _loadFirstPage,
-              child: const Text('Coba lagi'),
-            ),
-          ],
+          ),
         ),
-      );
+      ];
     }
-    if (_jobs.isEmpty) {
-      return Center(
-        child: Text(
-          'Lowongan tidak ditemukan',
-          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade500),
-        ),
-      );
-    }
-    return ListView.builder(
-      itemCount: _jobs.length + (_hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == _jobs.length) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Center(
-              child: _isLoadingMore
-                  ? const CircularProgressIndicator()
-                  : OutlinedButton(
-                      onPressed: _loadMore,
-                      child: const Text('Muat lebih banyak'),
-                    ),
-            ),
-          );
-        }
-        return _buildJobCard(_jobs[index], primaryColor);
-      },
-    );
+    return _pager.items.map((job) => _buildJobCard(job, primaryColor)).toList();
   }
 
   Widget _buildJobCard(JobModel job, Color primaryColor) {

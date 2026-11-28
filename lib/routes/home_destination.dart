@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:sprint/JobSeeker/main_navigation.dart';
 import 'package:sprint/JobSeeker/onBoarding1.dart';
 import 'package:sprint/models/user_model.dart';
+import 'package:sprint/recruiter/dasboard_page.dart';
+import 'package:sprint/recruiter/onboarding1_page.dart';
+import 'package:sprint/recruiter/onboarding_draft.dart';
 import 'package:sprint/services/auth_service.dart';
+import 'package:sprint/services/company_service.dart';
 import 'package:sprint/services/user_service.dart';
 
 /// Menentukan halaman beranda untuk pengguna yang SUDAH login.
@@ -16,6 +20,7 @@ import 'package:sprint/services/user_service.dart';
 Future<Widget?> resolveHomeDestination({
   required Widget Function() loginBuilder,
   UserService? userService,
+  CompanyService? companyService,
 }) async {
   final profile = await (userService ?? UserService()).getCurrentProfile();
   if (profile == null) return null;
@@ -26,10 +31,12 @@ Future<Widget?> resolveHomeDestination({
           ? const MainNavigation()
           : const OnBoarding1();
     case UserRole.recruiter:
-      return RoleNotReadyPage(
-        message: 'Tampilan recruiter belum tersedia pada versi ini.',
-        loginBuilder: loginBuilder,
-      );
+      // Recruiter yang sudah punya perusahaan langsung ke dashboard.
+      // Yang belum, mengisi onboarding perusahaan dari halaman 1.
+      final company = await (companyService ?? CompanyService()).getMyCompany();
+      if (company != null) return const DashboardPage();
+      CompanyOnboardingDraft.clear();
+      return const Onboarding1Page();
     case UserRole.admin:
       return RoleNotReadyPage(
         message: 'Akun admin tidak memakai aplikasi ini.',
@@ -38,8 +45,7 @@ Future<Widget?> resolveHomeDestination({
   }
 }
 
-/// Halaman sementara untuk role yang belum punya tampilan di aplikasi ini.
-/// Diganti dashboard recruiter setelah tampilan Firsha digabung.
+/// Halaman sementara untuk role yang tidak punya tampilan di aplikasi ini.
 class RoleNotReadyPage extends StatelessWidget {
   const RoleNotReadyPage({
     super.key,

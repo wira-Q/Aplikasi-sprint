@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/recruiter/onboarding_draft.dart';
 import 'onboarding3_page.dart';
 
 class Onboarding2Page extends StatefulWidget {
@@ -11,29 +13,50 @@ class Onboarding2Page extends StatefulWidget {
 class _Onboarding2PageState extends State<Onboarding2Page> {
   final Color navy = const Color(0xFF243F8F);
 
-  final TextEditingController addressController =
-      TextEditingController();
+  late final TextEditingController addressController;
 
   String? selectedCity;
   String? selectedWorkSystem;
 
-  final List<String> cities = [
-    'Malang',
-    'Surabaya',
-    'Pasuruan',
-  ];
+  // Kota dan sistem kerja mengikuti aturan database.
+  final List<String> cities = JobOptions.locations;
+  final List<String> workSystems = JobOptions.workSystems;
 
-  final List<String> workSystems = [
-    'WFO',
-    'WFH',
-    'Hybrid',
-    'Flexible',
-  ];
+  @override
+  void initState() {
+    super.initState();
+    addressController = TextEditingController(
+      text: CompanyOnboardingDraft.address,
+    );
+    selectedCity = CompanyOnboardingDraft.city;
+    selectedWorkSystem = CompanyOnboardingDraft.workSystem;
+  }
 
   @override
   void dispose() {
     addressController.dispose();
     super.dispose();
+  }
+
+  void _next() {
+    final address = addressController.text.trim();
+    if (selectedCity == null || address.isEmpty || selectedWorkSystem == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Lengkapi semua informasi terlebih dahulu.'),
+        ),
+      );
+      return;
+    }
+
+    CompanyOnboardingDraft.city = selectedCity;
+    CompanyOnboardingDraft.address = address;
+    CompanyOnboardingDraft.workSystem = selectedWorkSystem;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const Onboarding3Page()),
+    );
   }
 
   @override
@@ -48,11 +71,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
               height: 60,
               padding: const EdgeInsets.symmetric(horizontal: 24),
               decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(
-                    color: Colors.grey.shade300,
-                  ),
-                ),
+                border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
               ),
               child: Row(
                 children: [
@@ -94,10 +113,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
 
                   const Text(
                     '2/3',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF718096),
-                    ),
+                    style: TextStyle(fontSize: 11, color: Color(0xFF718096)),
                   ),
                 ],
               ),
@@ -197,8 +213,9 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
                               ),
                               filled: true,
                               fillColor: const Color(0xFFF0F4F8),
-                              contentPadding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(10),
                                 borderSide: BorderSide.none,
@@ -248,9 +265,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
                                 height: 1.5,
                               ),
                               prefixIcon: const Padding(
-                                padding: EdgeInsets.only(
-                                  bottom: 48,
-                                ),
+                                padding: EdgeInsets.only(bottom: 48),
                                 child: Icon(
                                   Icons.insert_drive_file_outlined,
                                   size: 16,
@@ -290,8 +305,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
                             spacing: 7,
                             runSpacing: 10,
                             children: workSystems.map((system) {
-                              final isSelected =
-                                  selectedWorkSystem == system;
+                              final isSelected = selectedWorkSystem == system;
 
                               return InkWell(
                                 onTap: () {
@@ -340,27 +354,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton(
-                 onPressed: () {
-                      if (selectedCity == null ||
-                          addressController.text.trim().isEmpty ||
-                          selectedWorkSystem == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Lengkapi semua informasi terlebih dahulu.',
-                            ),
-                          ),
-                        );
-                        return;
-                      }
-
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const Onboarding3Page(),
-                        ),
-                      );
-                    },
+                  onPressed: _next,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: navy,
                     foregroundColor: Colors.white,
@@ -380,10 +374,7 @@ class _Onboarding2PageState extends State<Onboarding2Page> {
                         ),
                       ),
                       SizedBox(width: 10),
-                      Icon(
-                        Icons.arrow_forward,
-                        size: 17,
-                      ),
+                      Icon(Icons.arrow_forward, size: 17),
                     ],
                   ),
                 ),

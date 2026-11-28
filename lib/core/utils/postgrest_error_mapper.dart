@@ -31,6 +31,12 @@ AppException mapPostgrestError(PostgrestException e) {
       return const AppException('Format data tidak valid.', code: 'invalid');
     case 'PGRST116':
       return const AppException('Data tidak ditemukan.', code: 'not_found');
+    case 'PGRST103':
+      // Nomor halaman melewati jumlah data. Ditangani PagedController.
+      return const AppException(
+        'Halaman tidak ditemukan.',
+        code: 'page_out_of_range',
+      );
     default:
       return const AppException('Terjadi kesalahan pada server. Coba lagi.');
   }

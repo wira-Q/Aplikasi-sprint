@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/date_format_id.dart';
 import 'package:sprint/core/utils/job_display.dart';
 import 'package:sprint/core/widgets/company_logo.dart';
 import 'package:sprint/models/job_model.dart';
@@ -90,10 +91,12 @@ class _DetailLowonganState extends State<DetailLowongan> {
     final canApply = job != null && job.isOpen && !_hasApplied;
 
     String buttonText = 'Lamar pekerjaan';
-    if (job != null && !job.isOpen) {
-      buttonText = 'Lowongan sudah ditutup';
-    } else if (_hasApplied) {
+    if (_hasApplied) {
       buttonText = 'Sudah melamar';
+    } else if (job != null && job.isExpired) {
+      buttonText = 'Lowongan sudah berakhir';
+    } else if (job != null && !job.isOpen) {
+      buttonText = 'Lowongan sudah ditutup';
     }
 
     return Scaffold(
@@ -151,6 +154,48 @@ class _DetailLowonganState extends State<DetailLowongan> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Info tanggal tutup lowongan. Tidak tampil jika tanpa batas waktu.
+  Widget _deadlineBox(JobModel job) {
+    final d = job.deadline;
+    if (d == null) return const SizedBox.shrink();
+
+    final expired = job.isExpired;
+    final left = job.daysLeft;
+    String text;
+    if (expired) {
+      text = 'Lowongan berakhir pada ${DateFormatId.date(d)}';
+    } else {
+      text = 'Lowongan ditutup pada ${DateFormatId.date(d)}';
+      if (left != null && left <= 7) {
+        text += left == 0 ? ' (hari terakhir)' : ' (tinggal $left hari)';
+      }
+    }
+    final urgent = expired || (left != null && left <= 7);
+    final color = expired
+        ? Colors.red
+        : (urgent ? const Color(0xFFB7791F) : Colors.grey.shade700);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          Icon(Icons.event_outlined, size: 16, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -281,6 +326,9 @@ class _DetailLowonganState extends State<DetailLowongan> {
                     ),
                   ),
                 ),
+
+                // Tanggal lowongan ditutup
+                _deadlineBox(job),
               ],
             ),
           ),

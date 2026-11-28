@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/logout_helper.dart';
+import 'package:sprint/core/widgets/company_logo.dart';
+import 'package:sprint/models/company_model.dart';
+import 'package:sprint/services/company_service.dart';
+import 'package:sprint/services/logo_service.dart';
 
-import 'login_page.dart';
-
-// Halaman Profil (konten saja).
+// Halaman Profil perusahaan (konten saja).
 // Bottom navigation dipegang oleh DashboardPage.
 class ProfilePage extends StatefulWidget {
   // Dipanggil saat tombol panah kembali ditekan (balik ke Home).
@@ -17,13 +22,56 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   static const Color bgBlue = Color(0xFF1C3B8B);
 
-  String name = 'PT XYZ';
-  String industry = 'Teknologi informasi';
-  String location = 'Malang, Jawa Timur';
-  String email = 'hr@ptxyz.com';
-  String website = 'www.ptxyz.com';
-  String description =
-      'Perusahaan yang bergerak di bidang pengembangan teknologi dan software';
+  final CompanyService _companies = CompanyService();
+  final LogoService _logos = LogoService();
+  final ImagePicker _picker = ImagePicker();
+
+  CompanyModel? _company;
+  bool _isLoading = true;
+  bool _isUploadingLogo = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      final company = await _companies.getMyCompany();
+      if (company == null) {
+        throw const AppException('Profil perusahaan belum dibuat.');
+      }
+      if (!mounted) return;
+      setState(() {
+        _company = company;
+        _isLoading = false;
+      });
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Gagal memuat profil. Periksa koneksi Anda.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   // Dialog logout "Already Leaving?" sesuai desain Figma
   void _confirmLogout() {
@@ -60,10 +108,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 const Text(
                   'Are you sure that want to logout?',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF17233D),
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: Color(0xFF17233D), fontSize: 11),
                 ),
                 const SizedBox(height: 22),
                 Row(
@@ -74,13 +119,8 @@ class _ProfilePageState extends State<ProfilePage> {
                         child: ElevatedButton(
                           onPressed: () {
                             Navigator.pop(dialogContext);
-                            Navigator.pushAndRemoveUntil(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const LoginPage(),
-                              ),
-                              (route) => false,
-                            );
+                            // Keluar sungguhan, lalu ke halaman login bersama.
+                            signOutAndGoToLogin(context);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFFF4B4B),
@@ -136,104 +176,162 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  void _editProfile() {
-    final nameC = TextEditingController(text: name);
-    final industryC = TextEditingController(text: industry);
-    final locationC = TextEditingController(text: location);
-    final emailC = TextEditingController(text: email);
-    final websiteC = TextEditingController(text: website);
-    final descC = TextEditingController(text: description);
-
-    Widget field(String label, TextEditingController c, {int lines = 1}) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: TextField(
-          controller: c,
-          maxLines: lines,
-          style: const TextStyle(fontSize: 12),
-          decoration: InputDecoration(
-            labelText: label,
-            isDense: true,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        ),
-      );
-    }
-
-    showDialog(
+  Future<void> _editProfile() async {
+    final company = _company;
+    if (company == null) return;
+    final updated = await showDialog<CompanyModel>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit Profil'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                field('Nama Perusahaan', nameC),
-                field('Bidang', industryC),
-                field('Lokasi', locationC),
-                field('Email', emailC),
-                field('Website', websiteC),
-                field('Deskripsi', descC, lines: 3),
-              ],
-            ),
+      builder: (_) => _EditCompanyDialog(company: company),
+    );
+    if (updated != null && mounted) {
+      setState(() => _company = updated);
+      _snack('Profil perusahaan diperbarui.');
+    }
+  }
+
+  // ---------- logo ----------
+  void _logoActions() {
+    final hasLogo = _company?.logo != null && _company!.logo!.isNotEmpty;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: Text(hasLogo ? 'Ganti logo' : 'Unggah logo'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickLogo();
+                },
+              ),
+              if (hasLogo)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.red),
+                  title: const Text(
+                    'Hapus logo',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _removeLogo();
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Batal'),
-            ),
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  if (nameC.text.trim().isNotEmpty) name = nameC.text.trim();
-                  industry = industryC.text.trim();
-                  location = locationC.text.trim();
-                  email = emailC.text.trim();
-                  website = websiteC.text.trim();
-                  description = descC.text.trim();
-                });
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Simpan'),
-            ),
-          ],
         );
       },
-    ).then((_) {
-      nameC.dispose();
-      industryC.dispose();
-      locationC.dispose();
-      emailC.dispose();
-      websiteC.dispose();
-      descC.dispose();
-    });
+    );
+  }
+
+  Future<void> _pickLogo() async {
+    if (_isUploadingLogo) return;
+    try {
+      final file = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 85,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+
+      setState(() => _isUploadingLogo = true);
+      final updated = await _logos.uploadLogo(bytes);
+      if (!mounted) return;
+      setState(() {
+        _company = updated;
+        _isUploadingLogo = false;
+      });
+      _snack('Logo diperbarui.');
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() => _isUploadingLogo = false);
+      _snack(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isUploadingLogo = false);
+      _snack('Gagal memilih atau mengunggah logo.');
+    }
+  }
+
+  Future<void> _removeLogo() async {
+    if (_isUploadingLogo) return;
+    setState(() => _isUploadingLogo = true);
+    try {
+      final updated = await _logos.removeLogo();
+      if (!mounted) return;
+      setState(() {
+        _company = updated;
+        _isUploadingLogo = false;
+      });
+      _snack('Logo dihapus.');
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() => _isUploadingLogo = false);
+      _snack(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isUploadingLogo = false);
+      _snack('Gagal menghapus logo.');
+    }
   }
 
   Widget _logo() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: SizedBox(
-        width: 50,
-        height: 50,
-        child: Image.asset(
-          'assets/images/logo_company.jpg',
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
-              color: const Color(0xFF3858A2),
-              child: const Icon(
-                Icons.business,
-                color: Colors.white,
-                size: 28,
+    return GestureDetector(
+      onTap: _company == null ? null : _logoActions,
+      child: Stack(
+        children: [
+          _isUploadingLogo
+              ? Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3858A2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                )
+              : CompanyLogo(path: _company?.logo, size: 50, radius: 10),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: const BoxDecoration(
+                color: Color(0xFF3B82F6),
+                shape: BoxShape.circle,
               ),
-            );
-          },
-        ),
+              child: const Icon(Icons.camera_alt, size: 9, color: Colors.white),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  String _value(String? v) {
+    if (_isLoading) return '...';
+    final t = v?.trim();
+    return (t == null || t.isEmpty) ? '-' : t;
   }
 
   Widget _companyCard() {
@@ -253,7 +351,9 @@ class _ProfilePageState extends State<ProfilePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  name,
+                  _value(_company?.companyName),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -262,7 +362,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  industry,
+                  _value(_company?.industry),
                   style: const TextStyle(color: Colors.white, fontSize: 10),
                 ),
               ],
@@ -339,6 +439,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = _company;
     return Container(
       width: double.infinity,
       height: double.infinity,
@@ -391,6 +492,30 @@ class _ProfilePageState extends State<ProfilePage> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: _companyCard(),
               ),
+              if (_errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _load,
+                        child: const Text(
+                          'Coba lagi',
+                          style: TextStyle(color: Colors.white, fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               const SizedBox(height: 22),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16),
@@ -408,13 +533,25 @@ class _ProfilePageState extends State<ProfilePage> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   children: [
-                    _infoRow(Icons.location_on_outlined, 'Lokasi', location),
-                    _infoRow(Icons.mail_outline_rounded, 'Email', email),
-                    _infoRow(Icons.language_rounded, 'Website', website),
+                    _infoRow(
+                      Icons.location_on_outlined,
+                      'Lokasi',
+                      _value(c?.location),
+                    ),
+                    _infoRow(
+                      Icons.mail_outline_rounded,
+                      'Email',
+                      _value(c?.email),
+                    ),
+                    _infoRow(
+                      Icons.language_rounded,
+                      'Website',
+                      _value(c?.website),
+                    ),
                     _infoRow(
                       Icons.description_outlined,
                       'Deskripsi',
-                      description,
+                      _value(c?.description),
                     ),
                   ],
                 ),
@@ -423,6 +560,150 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// Dialog edit profil perusahaan. Mengembalikan data terbaru jika tersimpan.
+class _EditCompanyDialog extends StatefulWidget {
+  const _EditCompanyDialog({required this.company});
+
+  final CompanyModel company;
+
+  @override
+  State<_EditCompanyDialog> createState() => _EditCompanyDialogState();
+}
+
+class _EditCompanyDialogState extends State<_EditCompanyDialog> {
+  final CompanyService _service = CompanyService();
+
+  late final TextEditingController _nameC;
+  late final TextEditingController _industryC;
+  late final TextEditingController _locationC;
+  late final TextEditingController _emailC;
+  late final TextEditingController _websiteC;
+  late final TextEditingController _descC;
+
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.company;
+    _nameC = TextEditingController(text: c.companyName);
+    _industryC = TextEditingController(text: c.industry ?? '');
+    _locationC = TextEditingController(text: c.location ?? '');
+    _emailC = TextEditingController(text: c.email ?? '');
+    _websiteC = TextEditingController(text: c.website ?? '');
+    _descC = TextEditingController(text: c.description ?? '');
+  }
+
+  @override
+  void dispose() {
+    _nameC.dispose();
+    _industryC.dispose();
+    _locationC.dispose();
+    _emailC.dispose();
+    _websiteC.dispose();
+    _descC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (_descC.text.trim().length > 500) {
+      setState(() => _error = 'Deskripsi maksimal 500 karakter.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final updated = await _service.updateMyCompany(
+        companyName: _nameC.text,
+        industry: _industryC.text,
+        location: _locationC.text,
+        email: _emailC.text,
+        website: _websiteC.text,
+        description: _descC.text,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, updated);
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _saving = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Terjadi kesalahan. Periksa koneksi Anda.';
+        _saving = false;
+      });
+    }
+  }
+
+  Widget _field(String label, TextEditingController c, {int lines = 1}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: c,
+        enabled: !_saving,
+        maxLines: lines,
+        style: const TextStyle(fontSize: 12),
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Profil'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _field('Nama Perusahaan', _nameC),
+            _field('Bidang', _industryC),
+            _field('Alamat lengkap', _locationC, lines: 2),
+            _field('Email', _emailC),
+            _field('Website (https://...)', _websiteC),
+            _field('Deskripsi', _descC, lines: 3),
+            if (_error != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _error!,
+                  style: const TextStyle(fontSize: 11, color: Colors.red),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        TextButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Simpan'),
+        ),
+      ],
     );
   }
 }

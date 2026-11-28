@@ -1,25 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/date_format_id.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/profile_options.dart';
+import 'package:sprint/services/company_service.dart';
+import 'package:sprint/services/job_service.dart';
 
-import 'job_store.dart';
 import 'dasboard_page.dart';
+import 'deadline_picker.dart';
+import 'job_draft.dart';
 import 'lowongan_saya_page.dart';
 
-// Buat Lowongan - tahap 2 (Jenis Pekerjaan, Sistem Kerja, Gaji, Deadline)
+// Buat Lowongan - tahap 2 (Jenis Pekerjaan, Sistem Kerja, Gaji, Tanggal tutup)
 // + popup "Lowongan Berhasil di Publikasikan!"
 class DetailTambahanPage extends StatefulWidget {
-  // Data dari halaman Buat Lowongan tahap 1
-  // (title, description, skills, education, experience, location, applicants)
-  final Map<String, dynamic> jobData;
-  final String company;
+  /// Isian dari halaman Buat Lowongan tahap 1.
+  final JobDraft draft;
 
-  const DetailTambahanPage({
-    super.key,
-    required this.jobData,
-    this.company = 'PT XYZ',
-  });
-
-  String get title => (jobData['title'] ?? '').toString();
-  String get location => (jobData['location'] ?? '').toString();
+  const DetailTambahanPage({super.key, required this.draft});
 
   @override
   State<DetailTambahanPage> createState() => _DetailTambahanPageState();
@@ -28,35 +27,27 @@ class DetailTambahanPage extends StatefulWidget {
 class _DetailTambahanPageState extends State<DetailTambahanPage> {
   static const Color _blue = Color(0xFF2863E9);
   static const Color _dark = Color(0xFF17233D);
+  static const int _maxSalary = 999999999;
 
-  static const List<String> _jobTypes = [
-    'Full-time',
-    'Part-time',
-    'Kontrak',
-    'Magang',
-  ];
-  static const List<String> _systems = ['Onsite', 'Hybrid', 'Remote'];
-  static const List<String> _months = [
-    'Januari',
-    'Februari',
-    'Maret',
-    'April',
-    'Mei',
-    'Juni',
-    'Juli',
-    'Agustus',
-    'September',
-    'Oktober',
-    'November',
-    'Desember',
-  ];
+  final JobService _jobService = JobService();
+  final CompanyService _companies = CompanyService();
 
   String? jobType;
   String? workSystem;
-  DateTime? deadline;
+  DateTime? _deadline;
+  String _companyName = '-';
+
+  bool _isSaving = false;
+  String? _errorMessage;
 
   final TextEditingController salaryC = TextEditingController();
   final TextEditingController deadlineC = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCompanyName();
+  }
 
   @override
   void dispose() {
@@ -65,57 +56,95 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
     super.dispose();
   }
 
-  // "Rp 4.000.000 - Rp 6.000.000" -> "4jt - 6jt"
-  String _salaryShort() {
-    final nums = RegExp(r'\d[\d.]*')
-        .allMatches(salaryC.text)
-        .map((m) => int.tryParse(m.group(0)!.replaceAll('.', '')) ?? 0)
-        .where((n) => n > 0)
-        .toList();
-
-    if (nums.isEmpty) return '-';
-
-    String f(int n) {
-      if (n >= 1000000) {
-        return '${(n / 1000000).toStringAsFixed(n % 1000000 == 0 ? 0 : 1)}jt';
-      }
-      return '$n';
+  Future<void> _loadCompanyName() async {
+    try {
+      final company = await _companies.getMyCompany();
+      if (!mounted || company == null) return;
+      setState(() => _companyName = company.companyName);
+    } catch (_) {
+      // Nama perusahaan di pratinjau boleh kosong.
     }
+  }
 
-    return nums.length == 1 ? f(nums[0]) : '${f(nums[0])} - ${f(nums[1])}';
+  int? get _salaryValue => int.tryParse(salaryC.text.trim());
+
+  // 5000000 -> "5jt"
+  String _salaryShort() {
+    final n = _salaryValue;
+    if (n == null || n <= 0) return '-';
+    if (n >= 1000000) {
+      return '${(n / 1000000).toStringAsFixed(n % 1000000 == 0 ? 0 : 1)}jt';
+    }
+    return '$n';
   }
 
   Future<void> _pickDeadline() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: deadline ?? now,
-      firstDate: now,
-      lastDate: DateTime(now.year + 5),
-    );
-
-    if (picked != null) {
+    if (_isSaving) return;
+    final picked = await pickJobDeadline(context, initial: _deadline);
+    if (picked != null && mounted) {
       setState(() {
-        deadline = picked;
-        deadlineC.text =
-            '${picked.day} ${_months[picked.month - 1].toLowerCase()} ${picked.year}';
+        _deadline = picked;
+        deadlineC.text = DateFormatId.date(picked);
+        _errorMessage = null;
       });
     }
   }
 
-  void _publish() {
-    // Simpan lowongan ke JobStore supaya muncul di Lowongan Saya
-    JobStore.jobs.insert(0, {
-      ...widget.jobData,
-      'type': jobType ?? 'Full-time',
-      'applicants': '0',
-      'system': workSystem ?? 'Hybrid',
-      'salary': salaryC.text.trim(),
-      'deadline': deadlineC.text,
+  Future<void> _publish() async {
+    if (_isSaving) return;
+    if (jobType == null || workSystem == null) {
+      setState(() => _errorMessage = 'Pilih jenis pekerjaan dan sistem kerja.');
+      return;
+    }
+    if (_deadline == null) {
+      setState(() => _errorMessage = 'Pilih tanggal lowongan ditutup.');
+      return;
+    }
+    final salary = _salaryValue;
+    if (salaryC.text.trim().isNotEmpty && (salary == null || salary < 0)) {
+      setState(() => _errorMessage = 'Gaji tidak valid.');
+      return;
+    }
+    if (salary != null && salary > _maxSalary) {
+      setState(() => _errorMessage = 'Gaji terlalu besar.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _errorMessage = null;
     });
 
-    // Langsung tampilkan popup "Lowongan Berhasil di Publikasikan!"
-    _showSuccess();
+    try {
+      final d = widget.draft;
+      await _jobService.createJob(
+        title: d.title,
+        description: d.fullDescription,
+        location: d.location,
+        jobType: jobType!,
+        workSystem: workSystem,
+        skills: d.skillsText,
+        education: d.education,
+        salary: (salary != null && salary > 0) ? salary : null,
+        deadline: _deadline,
+      );
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      // Langsung tampilkan popup "Lowongan Berhasil di Publikasikan!"
+      _showSuccess();
+    } on AppException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.message;
+        _isSaving = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Terjadi kesalahan. Periksa koneksi Anda.';
+        _isSaving = false;
+      });
+    }
   }
 
   void _showSuccess() {
@@ -171,10 +200,15 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Lowongan kamu sekarang sudah\ndapat dilihat oleh job seeker',
+                Text(
+                  'Lowongan kamu sekarang sudah dapat dilihat oleh job '
+                  'seeker sampai ${DateFormatId.date(_deadline!)}.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: _dark, fontSize: 9, height: 1.4),
+                  style: const TextStyle(
+                    color: _dark,
+                    fontSize: 9,
+                    height: 1.4,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
@@ -252,7 +286,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
 
   // ---------- UI ----------
 
-  Widget _label(String text) {
+  Widget _label(String text, {bool required = true}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Text.rich(
@@ -263,18 +297,23 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
             fontSize: 12,
             fontWeight: FontWeight.w600,
           ),
-          children: const [
-            TextSpan(text: ' *', style: TextStyle(color: Colors.red)),
-          ],
+          children: required
+              ? const [
+                  TextSpan(
+                    text: ' *',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ]
+              : null,
         ),
       ),
     );
   }
 
   OutlineInputBorder get _border => OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: _dark, width: 1.1),
-      );
+    borderRadius: BorderRadius.circular(8),
+    borderSide: const BorderSide(color: _dark, width: 1.1),
+  );
 
   InputDecoration _decoration(String hint, IconData icon) {
     return InputDecoration(
@@ -297,6 +336,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
     required List<String> items,
     required String? value,
     required ValueChanged<String?> onChanged,
+    String Function(String)? labelOf,
   }) {
     return DropdownButtonFormField<String>(
       value: value,
@@ -305,14 +345,20 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
       decoration: _decoration(hint, icon),
       style: const TextStyle(fontSize: 11, color: _dark),
       items: items
-          .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+          .map(
+            (e) => DropdownMenuItem(
+              value: e,
+              child: Text(labelOf == null ? e : labelOf(e)),
+            ),
+          )
           .toList(),
-      onChanged: onChanged,
+      onChanged: _isSaving ? null : onChanged,
     );
   }
 
   Widget _previewCard() {
-    final type = jobType ?? '-';
+    final type = jobType == null ? '-' : JobTypeLabels.of(jobType!);
+    final deadline = _deadline;
 
     return Container(
       width: double.infinity,
@@ -345,7 +391,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.title,
+                      widget.draft.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -355,7 +401,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
                       ),
                     ),
                     Text(
-                      widget.company,
+                      _companyName,
                       style: const TextStyle(color: _dark, fontSize: 10),
                     ),
                   ],
@@ -370,7 +416,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
               const SizedBox(width: 3),
               Flexible(
                 child: Text(
-                  widget.location,
+                  widget.draft.location,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: _blue, fontSize: 10),
                 ),
@@ -378,16 +424,25 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
               const SizedBox(width: 14),
               const Icon(Icons.schedule_rounded, size: 13, color: _blue),
               const SizedBox(width: 3),
-              Text(
-                type,
-                style: const TextStyle(color: _blue, fontSize: 10),
-              ),
+              Text(type, style: const TextStyle(color: _blue, fontSize: 10)),
               const SizedBox(width: 14),
-              const Icon(Icons.monetization_on_rounded,
-                  size: 13, color: _blue),
+              const Icon(Icons.monetization_on_rounded, size: 13, color: _blue),
               const SizedBox(width: 3),
               Text(
                 _salaryShort(),
+                style: const TextStyle(color: _blue, fontSize: 10),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.event_outlined, size: 13, color: _blue),
+              const SizedBox(width: 3),
+              Text(
+                deadline == null
+                    ? 'Tanggal tutup belum dipilih'
+                    : 'Ditutup ${DateFormatId.date(deadline)}',
                 style: const TextStyle(color: _blue, fontSize: 10),
               ),
             ],
@@ -405,7 +460,7 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _isSaving ? null : () => Navigator.pop(context),
           icon: const Icon(Icons.arrow_back, color: Colors.black, size: 21),
         ),
         title: const Text(
@@ -424,43 +479,63 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
           children: [
             _label('Jenis Pekerjaan'),
             _dropdown(
-              hint: 'Full-time',
+              hint: 'Pilih jenis pekerjaan',
               icon: Icons.work_outline_rounded,
-              items: _jobTypes,
+              items: JobOptions.jobTypes,
               value: jobType,
-              onChanged: (v) => setState(() => jobType = v),
+              labelOf: JobTypeLabels.of,
+              onChanged: (v) => setState(() {
+                jobType = v;
+                _errorMessage = null;
+              }),
             ),
             const SizedBox(height: 16),
             _label('Sistem Kerja'),
             _dropdown(
-              hint: 'Hybrid',
+              hint: 'Pilih sistem kerja',
               icon: Icons.schedule_rounded,
-              items: _systems,
+              items: JobOptions.workSystems,
               value: workSystem,
-              onChanged: (v) => setState(() => workSystem = v),
+              onChanged: (v) => setState(() {
+                workSystem = v;
+                _errorMessage = null;
+              }),
             ),
             const SizedBox(height: 16),
-            _label('Gaji'),
+            _label('Gaji per bulan (opsional)', required: false),
             TextField(
               controller: salaryC,
-              keyboardType: TextInputType.text,
-              onChanged: (_) => setState(() {}),
+              enabled: !_isSaving,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(9),
+              ],
+              onChanged: (_) => setState(() => _errorMessage = null),
               style: const TextStyle(fontSize: 11, color: _dark),
               decoration: _decoration(
-                'Rp 4.000.000- Rp 6.000.000',
+                'Contoh: 5000000 (angka saja, tanpa titik)',
                 Icons.monetization_on_rounded,
               ),
             ),
             const SizedBox(height: 16),
-            _label('Deadline Lamaran'),
+            _label('Tanggal Lowongan Ditutup'),
             TextField(
               controller: deadlineC,
               readOnly: true,
               onTap: _pickDeadline,
               style: const TextStyle(fontSize: 11, color: _dark),
               decoration: _decoration(
-                '30 oktober 2026',
+                'Pilih tanggal (maksimal 365 hari ke depan)',
                 Icons.calendar_today_outlined,
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 6, left: 2),
+              child: Text(
+                'Setelah tanggal ini, lowongan otomatis nonaktif dan tidak '
+                'bisa dilamar lagi.',
+                style: TextStyle(fontSize: 9, color: Color(0xFF8290A7)),
               ),
             ),
             const SizedBox(height: 22),
@@ -474,22 +549,38 @@ class _DetailTambahanPageState extends State<DetailTambahanPage> {
             ),
             const SizedBox(height: 8),
             _previewCard(),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 14),
+              Text(
+                _errorMessage!,
+                style: const TextStyle(fontSize: 11, color: Colors.red),
+              ),
+            ],
           ],
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _publish,
+        onPressed: _isSaving ? null : _publish,
         backgroundColor: _blue,
         elevation: 4,
-        label: const Text(
-          'Publikasikan Lowongan',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        label: _isSaving
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Text(
+                'Publikasikan Lowongan',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
       ),
     );
   }

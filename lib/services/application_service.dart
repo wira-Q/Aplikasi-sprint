@@ -5,6 +5,7 @@ import '../config/supabase_config.dart';
 import '../core/utils/app_exception.dart';
 import '../core/utils/postgrest_error_mapper.dart';
 import '../models/application_model.dart';
+import '../models/paged_result.dart';
 
 class ApplicationService {
   ApplicationService({SupabaseClient? client})
@@ -15,7 +16,7 @@ class ApplicationService {
   static const String _seekerSelect =
       '*, jobs(title, location, job_type, companies(company_name, logo))';
   static const String _recruiterSelect =
-      '*, users(name, email, phone, education, location), '
+      '*, users(name, email, phone, education, location, photo), '
       'cvs(file_name, file_size, file_url), jobs(title, location)';
   static const int _maxMessage = 1000;
   static const int _maxPageSize = 50;
@@ -54,7 +55,7 @@ class ApplicationService {
       if (e.code == '42501') {
         throw const AppException(
           'Lamaran tidak dapat dikirim. Pastikan lowongan masih dibuka '
-          'dan CV adalah milik Anda.',
+          '(belum lewat tanggal tutup) dan CV adalah milik Anda.',
           code: 'forbidden',
         );
       }
@@ -88,28 +89,40 @@ class ApplicationService {
     }
   }
 
-  Future<List<ApplicationModel>> getMyApplications({
+  Future<PagedResult<ApplicationModel>> getMyApplicationsPage({
     int page = 0,
-    int pageSize = 10,
+    int pageSize = kPageSize,
   }) async {
     final uid = _requireUid();
     _validatePaging(page, pageSize);
     try {
       final from = page * pageSize;
-      final rows = await _client
+      final res = await _client
           .from('applications')
           .select(_seekerSelect)
           .eq('id_user', uid)
           .order('applied_at', ascending: false)
-          .range(from, from + pageSize - 1);
-      return rows.map((r) => ApplicationModel.fromMap(r)).toList();
+          .range(from, from + pageSize - 1)
+          .count(CountOption.exact);
+      return PagedResult<ApplicationModel>(
+        items: res.data.map((r) => ApplicationModel.fromMap(r)).toList(),
+        total: res.count,
+        page: page,
+        pageSize: pageSize,
+      );
     } on PostgrestException catch (e) {
       throw mapPostgrestError(e);
     } catch (e) {
-      _log('getMyApplications error: ${e.runtimeType}');
+      _log('getMyApplicationsPage error: ${e.runtimeType}');
       throw const AppException('Gagal memuat lamaran. Periksa koneksi Anda.');
     }
   }
+
+  Future<List<ApplicationModel>> getMyApplications({
+    int page = 0,
+    int pageSize = 10,
+  }) async =>
+      (await getMyApplicationsPage(page: page, pageSize: pageSize)).items;
 
   Future<ApplicationModel?> getMyApplicationById(int idApplication) async {
     final uid = _requireUid();
@@ -133,11 +146,11 @@ class ApplicationService {
 
   /// Pelamar pada lowongan milik recruiter. RLS membatasi hasilnya,
   /// filter idJob hanya mempersempit.
-  Future<List<ApplicationModel>> getApplicants({
+  Future<PagedResult<ApplicationModel>> getApplicantsPage({
     int? idJob,
     String? status,
     int page = 0,
-    int pageSize = 10,
+    int pageSize = kPageSize,
   }) async {
     _requireUid();
     _validatePaging(page, pageSize);
@@ -150,17 +163,35 @@ class ApplicationService {
       if (status != null) q = q.eq('status', status);
 
       final from = page * pageSize;
-      final rows = await q
+      final res = await q
           .order('applied_at', ascending: false)
-          .range(from, from + pageSize - 1);
-      return rows.map((r) => ApplicationModel.fromMap(r)).toList();
+          .range(from, from + pageSize - 1)
+          .count(CountOption.exact);
+      return PagedResult<ApplicationModel>(
+        items: res.data.map((r) => ApplicationModel.fromMap(r)).toList(),
+        total: res.count,
+        page: page,
+        pageSize: pageSize,
+      );
     } on PostgrestException catch (e) {
       throw mapPostgrestError(e);
     } catch (e) {
-      _log('getApplicants error: ${e.runtimeType}');
+      _log('getApplicantsPage error: ${e.runtimeType}');
       throw const AppException('Gagal memuat pelamar. Periksa koneksi Anda.');
     }
   }
+
+  Future<List<ApplicationModel>> getApplicants({
+    int? idJob,
+    String? status,
+    int page = 0,
+    int pageSize = 10,
+  }) async => (await getApplicantsPage(
+    idJob: idJob,
+    status: status,
+    page: page,
+    pageSize: pageSize,
+  )).items;
 
   Future<ApplicationModel?> getApplicantById(int idApplication) async {
     _requireUid();

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sprint/core/utils/app_exception.dart';
+import 'package:sprint/core/utils/paged_controller.dart';
+import 'package:sprint/core/widgets/page_bar.dart';
 import 'package:sprint/models/notification_model.dart';
 import 'package:sprint/services/notification_service.dart';
 
-/// Menampilkan popup daftar notifikasi pengguna yang sedang login.
-/// Notifikasi dibuat oleh sistem (trigger database); popup ini hanya
-/// membaca dan menandai dibaca.
+/// Menampilkan popup daftar notifikasi pengguna yang sedang login (5 per
+/// halaman, tarik ke bawah untuk memuat ulang). Notifikasi dibuat oleh
+/// sistem (trigger database); popup ini hanya membaca dan menandai dibaca.
 ///
 /// [onOpenApplication] dipanggil (setelah popup ditutup) saat pengguna
 /// mengetuk notifikasi yang terkait lamaran. Jika null, mengetuk hanya
@@ -36,87 +38,37 @@ class _NotificationSheet extends StatefulWidget {
 }
 
 class _NotificationSheetState extends State<_NotificationSheet> {
-  static const int _pageSize = 20;
   static const Color _primaryColor = Color(0xFF203F8B);
 
   final NotificationService _service = NotificationService();
+  late final PagedController<NotificationModel> _pager;
 
-  List<NotificationModel> _items = [];
-  bool _isLoading = true;
-  bool _isLoadingMore = false;
   bool _isMarkingAll = false;
-  bool _hasMore = false;
-  int _page = 0;
 
-  /// Gagal memuat daftar.
-  String? _errorMessage;
-
-  /// Gagal menandai dibaca.
+  /// Gagal menandai dibaca atau memuat ulang.
   String? _actionMessage;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _pager = PagedController<NotificationModel>(
+      fetch: (page, size) =>
+          _service.getMyNotificationsPage(page: page, pageSize: size),
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      errorText: 'Gagal memuat notifikasi. Periksa koneksi Anda.',
+      onBackgroundError: (message) {
+        if (mounted) setState(() => _actionMessage = message);
+      },
+    );
+    _pager.load(page: 0);
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _actionMessage = null;
-      _page = 0;
-    });
-    try {
-      final list = await _service.getMyNotifications(
-        page: 0,
-        pageSize: _pageSize,
-      );
-      if (!mounted) return;
-      setState(() {
-        _items = list;
-        _hasMore = list.length == _pageSize;
-        _isLoading = false;
-      });
-    } on AppException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = e.message;
-        _isLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = 'Gagal memuat notifikasi. Periksa koneksi Anda.';
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _loadMore() async {
-    if (_isLoadingMore || !_hasMore) return;
-    setState(() => _isLoadingMore = true);
-    try {
-      final list = await _service.getMyNotifications(
-        page: _page + 1,
-        pageSize: _pageSize,
-      );
-      if (!mounted) return;
-      setState(() {
-        _page += 1;
-        _items = [..._items, ...list];
-        _hasMore = list.length == _pageSize;
-        _isLoadingMore = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoadingMore = false;
-        _actionMessage = e is AppException
-            ? e.message
-            : 'Gagal memuat notifikasi. Periksa koneksi Anda.';
-      });
-    }
+  @override
+  void dispose() {
+    _pager.dispose();
+    super.dispose();
   }
 
   Future<void> _markRead(NotificationModel item) async {
@@ -126,8 +78,8 @@ class _NotificationSheetState extends State<_NotificationSheet> {
       if (!mounted) return;
       setState(() {
         _actionMessage = null;
-        _items = [
-          for (final n in _items)
+        _pager.items = [
+          for (final n in _pager.items)
             n.idNotification == updated.idNotification ? updated : n,
         ];
       });
@@ -166,7 +118,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
       await _service.markAllAsRead();
       if (!mounted) return;
       setState(() {
-        _items = _items.map(_asRead).toList();
+        _pager.items = _pager.items.map(_asRead).toList();
         _isMarkingAll = false;
       });
     } catch (e) {
@@ -190,8 +142,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
     createdAt: n.createdAt,
   );
 
-  /// Ikon hanya hiasan, dipilih dari kata di judul. Jika judul tidak
-  /// dikenali, dipakai ikon lonceng.
+  /// Ikon hanya hiasan, dipilih dari kata di judul.
   IconData _iconFor(String title) {
     final t = title.toLowerCase();
     if (t.contains('interview') || t.contains('jadwal')) {
@@ -200,6 +151,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
     if (t.contains('diterima')) return Icons.check_circle_outline;
     if (t.contains('belum dapat')) return Icons.cancel_outlined;
     if (t.contains('terkirim')) return Icons.send_outlined;
+    if (t.contains('pelamar')) return Icons.person_add_alt_1_outlined;
     return Icons.notifications_none_rounded;
   }
 
@@ -216,7 +168,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.7;
-    final hasUnread = _items.any((n) => !n.isRead);
+    final hasUnread = _pager.items.any((n) => !n.isRead);
 
     return SafeArea(
       top: false,
@@ -282,72 +234,88 @@ class _NotificationSheetState extends State<_NotificationSheet> {
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_errorMessage != null) {
-      return Center(
-        child: Padding(
+    final children = <Widget>[];
+
+    if (_pager.isLoading) {
+      children.add(
+        const SizedBox(
+          height: 220,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    } else if (_pager.error != null && _pager.items.isEmpty) {
+      children.add(
+        Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                _errorMessage!,
+                _pager.error!,
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                   fontSize: 13,
                   color: Colors.grey.shade700,
                 ),
               ),
-              TextButton(onPressed: _load, child: const Text('Coba lagi')),
+              TextButton(
+                onPressed: () => _pager.load(),
+                child: const Text('Coba lagi'),
+              ),
             ],
           ),
         ),
       );
-    }
-    if (_items.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.notifications_off_outlined,
-              size: 44,
-              color: Colors.grey.shade400,
+    } else if (_pager.items.isEmpty) {
+      children.add(
+        SizedBox(
+          height: 220,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.notifications_off_outlined,
+                  size: 44,
+                  color: Colors.grey.shade400,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Belum ada notifikasi',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Belum ada notifikasi',
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                color: Colors.grey.shade600,
-              ),
-            ),
-          ],
+          ),
         ),
       );
+    } else {
+      for (final item in _pager.items) {
+        children.add(_buildItem(item));
+        children.add(const Divider(height: 1));
+      }
     }
 
-    return ListView.separated(
-      itemCount: _items.length + (_hasMore ? 1 : 0),
-      separatorBuilder: (context, index) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        if (index == _items.length) {
-          return Padding(
-            padding: const EdgeInsets.all(12),
-            child: Center(
-              child: _isLoadingMore
-                  ? const CircularProgressIndicator()
-                  : TextButton(
-                      onPressed: _loadMore,
-                      child: const Text('Muat lebih banyak'),
-                    ),
-            ),
-          );
-        }
-        return _buildItem(_items[index]);
+    children.add(
+      PageBar(
+        page: _pager.page,
+        totalPages: _pager.totalPages,
+        enabled: !_pager.isLoading,
+        onPageSelected: (p) => _pager.goTo(p),
+      ),
+    );
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        setState(() => _actionMessage = null);
+        await _pager.load(spinner: false);
       },
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: children,
+      ),
     );
   }
 

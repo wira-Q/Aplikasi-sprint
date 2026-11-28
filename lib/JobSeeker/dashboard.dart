@@ -4,17 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sprint/core/utils/app_exception.dart';
 import 'package:sprint/core/utils/job_display.dart';
+import 'package:sprint/core/utils/paged_controller.dart';
 import 'package:sprint/core/widgets/company_logo.dart';
 import 'package:sprint/core/widgets/notification_sheet.dart';
+import 'package:sprint/core/widgets/page_bar.dart';
 import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/paged_result.dart';
 import 'package:sprint/models/user_model.dart';
+import 'package:sprint/services/application_service.dart';
 import 'package:sprint/services/job_service.dart';
 import 'package:sprint/services/notification_service.dart';
 import 'package:sprint/services/user_service.dart';
+import 'lamaran_page_resolver.dart';
 import 'maps.dart';
 import 'detailLowongan.dart';
-import 'package:sprint/services/application_service.dart';
-import 'lamaran_page_resolver.dart';
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
@@ -24,8 +27,6 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
-  static const int _pageSize = 10;
-
   /// Jumlah notifikasi belum dibaca dicek ulang setiap interval ini.
   static const Duration _unreadRefresh = Duration(seconds: 60);
 
@@ -34,17 +35,13 @@ class _DashboardState extends State<Dashboard> {
   final NotificationService _notifications = NotificationService();
   final ApplicationService _applications = ApplicationService();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scroll = ScrollController();
 
+  late final PagedController<JobModel> _pager;
   Timer? _debounce;
   Timer? _unreadTimer;
   UserModel? _profile;
   int _unreadCount = 0;
-
-  List<JobModel> _jobs = [];
-  bool _isLoading = true;
-  bool _isLoadingMore = false;
-  bool _hasMore = false;
-  String? _errorMessage;
 
   /// Kata kunci yang sedang dipakai (sudah melewati jeda pengetikan).
   String _query = '';
@@ -52,14 +49,18 @@ class _DashboardState extends State<Dashboard> {
   /// true = daftar rekomendasi (dari preferensi profil). Jika rekomendasi
   /// kosong, otomatis memakai semua lowongan terbaru.
   bool _recommendMode = true;
-  int _page = 0;
-
-  /// Untuk mengabaikan hasil permintaan lama.
-  int _requestId = 0;
 
   @override
   void initState() {
     super.initState();
+    _pager = PagedController<JobModel>(
+      fetch: _fetch,
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      errorText: 'Gagal memuat lowongan. Periksa koneksi Anda.',
+      onBackgroundError: _showMessage,
+    );
     _init();
     _loadUnread();
     _unreadTimer = Timer.periodic(_unreadRefresh, (_) => _loadUnread());
@@ -69,8 +70,17 @@ class _DashboardState extends State<Dashboard> {
   void dispose() {
     _debounce?.cancel();
     _unreadTimer?.cancel();
+    _pager.dispose();
     _searchController.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _init() async {
@@ -81,7 +91,7 @@ class _DashboardState extends State<Dashboard> {
     } catch (_) {
       // Nama kosong tidak menghalangi daftar lowongan.
     }
-    await _loadFirstPage();
+    await _pager.load(page: 0);
   }
 
   Future<void> _loadUnread() async {
@@ -130,82 +140,25 @@ class _DashboardState extends State<Dashboard> {
     }
   }
 
-  Future<List<JobModel>> _fetch(int page, bool recommend) {
-    if (recommend) {
+  Future<PagedResult<JobModel>> _fetch(int page, int size) async {
+    if (_query.isEmpty) {
       final p = _profile;
-      return _jobService.getRecommendedJobs(
+      final rec = await _jobService.getRecommendedJobsPage(
         locations: p?.preferredLocations ?? const [],
         jobTypes: p?.preferredJobTypes ?? const [],
         page: page,
-        pageSize: _pageSize,
+        pageSize: size,
       );
-    }
-    return _jobService.getJobs(
-      query: _query.isEmpty ? null : _query,
-      page: page,
-      pageSize: _pageSize,
-    );
-  }
-
-  Future<void> _loadFirstPage() async {
-    final id = ++_requestId;
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _page = 0;
-    });
-    try {
-      var recommend = _query.isEmpty;
-      var list = await _fetch(0, recommend);
-      if (recommend && list.isEmpty) {
-        recommend = false;
-        list = await _fetch(0, false);
+      if (rec.total > 0) {
+        _recommendMode = true;
+        return rec;
       }
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _recommendMode = recommend;
-        _jobs = list;
-        _hasMore = list.length == _pageSize;
-        _isLoading = false;
-      });
-    } on AppException catch (e) {
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _errorMessage = e.message;
-        _isLoading = false;
-      });
-    } catch (_) {
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _errorMessage = 'Gagal memuat lowongan. Periksa koneksi Anda.';
-        _isLoading = false;
-      });
+      // Tidak ada yang cocok dengan preferensi: tampilkan semua lowongan.
+      _recommendMode = false;
+      return _jobService.getJobsPage(page: page, pageSize: size);
     }
-  }
-
-  Future<void> _loadMore() async {
-    if (_isLoadingMore || !_hasMore) return;
-    final id = _requestId;
-    setState(() => _isLoadingMore = true);
-    try {
-      final list = await _fetch(_page + 1, _recommendMode);
-      if (!mounted || id != _requestId) return;
-      setState(() {
-        _page += 1;
-        _jobs = [..._jobs, ...list];
-        _hasMore = list.length == _pageSize;
-        _isLoadingMore = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoadingMore = false);
-      final message = e is AppException
-          ? e.message
-          : 'Gagal memuat lowongan. Periksa koneksi Anda.';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
+    _recommendMode = false;
+    return _jobService.getJobsPage(query: _query, page: page, pageSize: size);
   }
 
   void _onSearchChanged(String value) {
@@ -215,7 +168,7 @@ class _DashboardState extends State<Dashboard> {
       final query = value.trim();
       if (query == _query) return;
       _query = query;
-      _loadFirstPage();
+      _pager.load(page: 0);
     });
   }
 
@@ -223,7 +176,23 @@ class _DashboardState extends State<Dashboard> {
     _debounce?.cancel();
     _searchController.clear();
     _query = '';
-    _loadFirstPage();
+    _pager.load(page: 0);
+  }
+
+  /// Tarik ke bawah: muat ulang halaman yang sedang dibuka.
+  Future<void> _refresh() async {
+    await Future.wait([_pager.load(spinner: false), _loadUnread()]);
+  }
+
+  Future<void> _goToPage(int page) async {
+    await _pager.goTo(page);
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   String get _sectionTitle {
@@ -287,120 +256,131 @@ class _DashboardState extends State<Dashboard> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. BAGIAN HEADER (SAPAAN & LONCENG NOTIFIKASI)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      name.isEmpty ? 'Halo!' : 'Halo, $name',
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+        child: RefreshIndicator(
+          onRefresh: _refresh,
+          child: SingleChildScrollView(
+            controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. BAGIAN HEADER (SAPAAN & LONCENG NOTIFIKASI)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name.isEmpty ? 'Halo!' : 'Halo, $name',
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  _buildBellButton(primaryColor),
-                ],
-              ),
+                    const SizedBox(width: 12),
+                    _buildBellButton(primaryColor),
+                  ],
+                ),
 
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-              // 2. SEARCH BAR (lebih pendek) + TOMBOL LOKASI DI KANANNYA
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: _onSearchChanged,
-                      decoration: InputDecoration(
-                        hintText: 'Cari lowongan atau keahlian',
-                        hintStyle: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey,
+                // 2. SEARCH BAR (lebih pendek) + TOMBOL LOKASI DI KANANNYA
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                        decoration: InputDecoration(
+                          hintText: 'Cari lowongan atau keahlian',
+                          hintStyle: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: Colors.grey,
+                            size: 20,
+                          ),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(
+                                    Icons.clear,
+                                    color: Colors.grey,
+                                    size: 18,
+                                  ),
+                                  onPressed: _clearSearch,
+                                )
+                              : null,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 14,
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFFF0F4FF),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide.none,
+                          ),
                         ),
-                        prefixIcon: const Icon(
-                          Icons.search,
-                          color: Colors.grey,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () async {
+                        final changed = await Navigator.push<bool>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const MapsPage(),
+                          ),
+                        );
+                        // Kota diubah: muat ulang profil dan rekomendasi.
+                        if (changed == true && mounted) _init();
+                      },
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: primaryColor,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(
+                          Icons.location_on,
+                          color: Colors.white,
                           size: 20,
                         ),
-                        // Tombol hapus (X) muncul saat kolom pencarian terisi
-                        suffixIcon: _searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(
-                                  Icons.clear,
-                                  color: Colors.grey,
-                                  size: 18,
-                                ),
-                                onPressed: _clearSearch,
-                              )
-                            : null,
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 14,
-                        ),
-                        filled: true,
-                        fillColor: const Color(0xFFF0F4FF),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide.none,
-                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    onTap: () async {
-                      final changed = await Navigator.push<bool>(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const MapsPage(),
-                        ),
-                      );
-                      // Kota diubah: muat ulang profil dan rekomendasi.
-                      if (changed == true && mounted) _init();
-                    },
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: primaryColor,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(
-                        Icons.location_on,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-
-              // 3. JUDUL DAFTAR
-              Text(
-                _sectionTitle,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+                  ],
                 ),
-              ),
 
-              const SizedBox(height: 16),
+                const SizedBox(height: 24),
 
-              // 4. KARTU DAFTAR LOWONGAN
-              _buildContent(),
-            ],
+                // 3. JUDUL DAFTAR
+                Text(
+                  _sectionTitle,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 4. KARTU DAFTAR LOWONGAN (5 per halaman)
+                _buildContent(),
+
+                PageBar(
+                  page: _pager.page,
+                  totalPages: _pager.totalPages,
+                  enabled: !_pager.isLoading,
+                  onPageSelected: _goToPage,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -408,20 +388,20 @@ class _DashboardState extends State<Dashboard> {
   }
 
   Widget _buildContent() {
-    if (_isLoading) {
+    if (_pager.isLoading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 40),
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    if (_errorMessage != null) {
+    if (_pager.error != null && _pager.items.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 40),
         child: Center(
           child: Column(
             children: [
               Text(
-                _errorMessage!,
+                _pager.error!,
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                   fontSize: 13,
@@ -430,7 +410,7 @@ class _DashboardState extends State<Dashboard> {
               ),
               const SizedBox(height: 8),
               TextButton(
-                onPressed: _loadFirstPage,
+                onPressed: () => _pager.load(),
                 child: const Text('Coba lagi'),
               ),
             ],
@@ -438,7 +418,7 @@ class _DashboardState extends State<Dashboard> {
         ),
       );
     }
-    if (_jobs.isEmpty) {
+    if (_pager.items.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 40),
         child: Center(
@@ -463,26 +443,12 @@ class _DashboardState extends State<Dashboard> {
         ),
       );
     }
-    return Column(
-      children: [
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: _jobs.length,
-          separatorBuilder: (context, index) => const SizedBox(height: 16),
-          itemBuilder: (context, index) => _buildJobCard(_jobs[index]),
-        ),
-        if (_hasMore)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: _isLoadingMore
-                ? const CircularProgressIndicator()
-                : OutlinedButton(
-                    onPressed: _loadMore,
-                    child: const Text('Muat lebih banyak'),
-                  ),
-          ),
-      ],
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _pager.items.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 16),
+      itemBuilder: (context, index) => _buildJobCard(_pager.items[index]),
     );
   }
 

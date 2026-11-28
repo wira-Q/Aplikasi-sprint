@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:sprint/core/utils/app_exception.dart';
 import 'package:sprint/core/utils/application_status_style.dart';
 import 'package:sprint/core/utils/date_format_id.dart';
+import 'package:sprint/core/utils/paged_controller.dart';
+import 'package:sprint/core/widgets/page_bar.dart';
 import 'package:sprint/models/application_model.dart';
 import 'package:sprint/services/application_service.dart';
 import 'lamaran_page_resolver.dart';
@@ -15,96 +16,55 @@ class StatusLamaran extends StatefulWidget {
 }
 
 class _StatusLamaranState extends State<StatusLamaran> {
-  static const int _pageSize = 10;
-
   final ApplicationService _service = ApplicationService();
-
-  List<ApplicationModel> _items = [];
-  bool _isLoading = true;
-  bool _isLoadingMore = false;
-  bool _hasMore = false;
-  String? _errorMessage;
-  int _page = 0;
+  final ScrollController _scroll = ScrollController();
+  late final PagedController<ApplicationModel> _pager;
 
   @override
   void initState() {
     super.initState();
-    _loadFirstPage();
+    _pager = PagedController<ApplicationModel>(
+      fetch: (page, size) =>
+          _service.getMyApplicationsPage(page: page, pageSize: size),
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      errorText: 'Gagal memuat lamaran. Periksa koneksi Anda.',
+      onBackgroundError: (message) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      },
+    );
+    _pager.load(page: 0);
   }
 
-  Future<void> _loadFirstPage({bool showSpinner = true}) async {
-    if (showSpinner) {
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
-    }
-    try {
-      final list = await _service.getMyApplications(
-        page: 0,
-        pageSize: _pageSize,
-      );
-      if (!mounted) return;
-      setState(() {
-        _items = list;
-        _page = 0;
-        _hasMore = list.length == _pageSize;
-        _errorMessage = null;
-        _isLoading = false;
-      });
-    } on AppException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = e.message;
-        _isLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = 'Gagal memuat lamaran. Periksa koneksi Anda.';
-        _isLoading = false;
-      });
-    }
+  @override
+  void dispose() {
+    _pager.dispose();
+    _scroll.dispose();
+    super.dispose();
   }
-
-  Future<void> _loadMore() async {
-    if (_isLoadingMore || !_hasMore) return;
-    setState(() => _isLoadingMore = true);
-    try {
-      final list = await _service.getMyApplications(
-        page: _page + 1,
-        pageSize: _pageSize,
-      );
-      if (!mounted) return;
-      setState(() {
-        _page += 1;
-        _items = [..._items, ...list];
-        _hasMore = list.length == _pageSize;
-        _isLoadingMore = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoadingMore = false);
-      final message = e is AppException
-          ? e.message
-          : 'Gagal memuat lamaran. Periksa koneksi Anda.';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  /// Halaman detail sesuai status lamaran.
-  /// Halaman detail sesuai status lamaran.
-  Widget _pageFor(ApplicationModel a) => lamaranDetailPage(a);
 
   Future<void> _open(ApplicationModel a) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => _pageFor(a)),
+      MaterialPageRoute(builder: (context) => lamaranDetailPage(a)),
     );
     // Muat ulang diam-diam: status mungkin berubah sejak daftar dimuat.
-    if (mounted) _loadFirstPage(showSpinner: false);
+    if (mounted) _pager.load(spinner: false);
+  }
+
+  Future<void> _goToPage(int page) async {
+    await _pager.goTo(page);
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   @override
@@ -174,7 +134,22 @@ class _StatusLamaranState extends State<StatusLamaran> {
                     topRight: Radius.circular(30),
                   ),
                 ),
-                child: _buildContent(),
+                child: RefreshIndicator(
+                  onRefresh: () => _pager.load(spinner: false),
+                  child: ListView(
+                    controller: _scroll,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      ..._buildChildren(),
+                      PageBar(
+                        page: _pager.page,
+                        totalPages: _pager.totalPages,
+                        enabled: !_pager.isLoading,
+                        onPageSelected: _goToPage,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
@@ -183,63 +158,58 @@ class _StatusLamaranState extends State<StatusLamaran> {
     );
   }
 
-  Widget _buildContent() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+  List<Widget> _buildChildren() {
+    if (_pager.isLoading) {
+      return const [
+        SizedBox(
+          height: 260,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ];
     }
-    if (_errorMessage != null && _items.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _errorMessage!,
-              textAlign: TextAlign.center,
+    if (_pager.error != null && _pager.items.isEmpty) {
+      return [
+        SizedBox(
+          height: 260,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _pager.error!,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _pager.load(),
+                  child: const Text('Coba lagi'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_pager.items.isEmpty) {
+      return [
+        SizedBox(
+          height: 260,
+          child: Center(
+            child: Text(
+              'Belum ada lamaran',
               style: GoogleFonts.poppins(
                 fontSize: 13,
-                color: Colors.grey.shade600,
+                color: Colors.grey.shade500,
               ),
             ),
-            TextButton(
-              onPressed: _loadFirstPage,
-              child: const Text('Coba lagi'),
-            ),
-          ],
+          ),
         ),
-      );
+      ];
     }
-    if (_items.isEmpty) {
-      return Center(
-        child: Text(
-          'Belum ada lamaran',
-          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade500),
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: () => _loadFirstPage(showSpinner: false),
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: _items.length + (_hasMore ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index == _items.length) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: Center(
-                child: _isLoadingMore
-                    ? const CircularProgressIndicator()
-                    : TextButton(
-                        onPressed: _loadMore,
-                        child: const Text('Muat lebih banyak'),
-                      ),
-              ),
-            );
-          }
-          return _buildItem(_items[index]);
-        },
-      ),
-    );
+    return _pager.items.map(_buildItem).toList();
   }
 
   Widget _buildItem(ApplicationModel item) {

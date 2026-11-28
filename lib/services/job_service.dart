@@ -6,6 +6,7 @@ import '../core/utils/app_exception.dart';
 import '../core/utils/postgrest_error_mapper.dart';
 import '../models/company_model.dart';
 import '../models/job_model.dart';
+import '../models/paged_result.dart';
 import '../models/profile_options.dart';
 import 'company_service.dart';
 
@@ -18,20 +19,33 @@ class JobService {
   final CompanyService _companies;
 
   static const String _select = '*, companies(company_name, logo, industry)';
+
+  /// Khusus daftar lowongan recruiter: ikut menghitung jumlah pelamar.
+  static const String _recruiterSelect =
+      '*, companies(company_name, logo, industry), applications(count)';
   static const int _maxPageSize = 50;
+
+  String? _cachedUid;
+  CompanyModel? _cachedCompany;
+
+  /// Lowongan yang belum lewat tanggal tutup. Database juga menjaganya lewat
+  /// RLS, tetapi pelamar lama masih boleh melihat lowongan yang berakhir
+  /// (untuk riwayat), jadi daftar pencarian memfilternya sendiri.
+  String get _notExpiredFilter =>
+      'deadline.is.null,deadline.gte.${JobModel.isoDate(JobModel.todayWib())}';
 
   // ---------------------------------------------------------------- JOB SEEKER
 
-  /// Daftar lowongan Dibuka, dengan pencarian, filter, dan pagination.
+  /// Daftar lowongan dibuka dengan pencarian, filter, dan nomor halaman.
   /// Filter utama menerima SATU lokasi. [page] dimulai dari 0.
-  Future<List<JobModel>> getJobs({
+  Future<PagedResult<JobModel>> getJobsPage({
     String? query,
     String? location,
     String? jobType,
     String? workSystem,
     String? education,
     int page = 0,
-    int pageSize = 10,
+    int pageSize = kPageSize,
   }) async {
     _requireUid();
     _validatePaging(page, pageSize);
@@ -52,7 +66,8 @@ class JobService {
       var q = _client
           .from('jobs')
           .select(_select)
-          .eq('status', JobOptions.statusOpen);
+          .eq('status', JobOptions.statusOpen)
+          .or(_notExpiredFilter);
 
       final term = _sanitizeSearch(query);
       if (term.isNotEmpty) {
@@ -66,27 +81,49 @@ class JobService {
       if (educationFilter != null) q = q.eq('education', educationFilter);
 
       final from = page * pageSize;
-      final rows = await q
+      final res = await q
           .order('id_job', ascending: false)
-          .range(from, from + pageSize - 1);
-      return rows.map((r) => JobModel.fromMap(r)).toList();
+          .range(from, from + pageSize - 1)
+          .count(CountOption.exact);
+      return PagedResult<JobModel>(
+        items: res.data.map((r) => JobModel.fromMap(r)).toList(),
+        total: res.count,
+        page: page,
+        pageSize: pageSize,
+      );
     } on PostgrestException catch (e) {
       throw mapPostgrestError(e);
     } catch (e) {
-      _log('getJobs error: ${e.runtimeType}');
+      _log('getJobsPage error: ${e.runtimeType}');
       throw const AppException('Gagal memuat lowongan. Periksa koneksi Anda.');
     }
   }
 
+  Future<List<JobModel>> getJobs({
+    String? query,
+    String? location,
+    String? jobType,
+    String? workSystem,
+    String? education,
+    int page = 0,
+    int pageSize = 10,
+  }) async => (await getJobsPage(
+    query: query,
+    location: location,
+    jobType: jobType,
+    workSystem: workSystem,
+    education: education,
+    page: page,
+    pageSize: pageSize,
+  )).items;
+
   /// Halaman rekomendasi: boleh banyak lokasi dan jenis pekerjaan, diambil
-  /// dari preferensi di profil (UserModel.preferredLocations dan
-  /// preferredJobTypes). Daftar kosong berarti tidak difilter. Jika hasilnya
-  /// kosong, UI boleh menampilkan getJobs() biasa sebagai cadangan.
-  Future<List<JobModel>> getRecommendedJobs({
+  /// dari preferensi di profil. Daftar kosong berarti tidak difilter.
+  Future<PagedResult<JobModel>> getRecommendedJobsPage({
     List<String> locations = const [],
     List<String> jobTypes = const [],
     int page = 0,
-    int pageSize = 10,
+    int pageSize = kPageSize,
   }) async {
     _requireUid();
     _validatePaging(page, pageSize);
@@ -100,22 +137,41 @@ class JobService {
       var q = _client
           .from('jobs')
           .select(_select)
-          .eq('status', JobOptions.statusOpen);
+          .eq('status', JobOptions.statusOpen)
+          .or(_notExpiredFilter);
       if (locations.isNotEmpty) q = q.inFilter('location', locations);
       if (jobTypes.isNotEmpty) q = q.inFilter('job_type', jobTypes);
 
       final from = page * pageSize;
-      final rows = await q
+      final res = await q
           .order('id_job', ascending: false)
-          .range(from, from + pageSize - 1);
-      return rows.map((r) => JobModel.fromMap(r)).toList();
+          .range(from, from + pageSize - 1)
+          .count(CountOption.exact);
+      return PagedResult<JobModel>(
+        items: res.data.map((r) => JobModel.fromMap(r)).toList(),
+        total: res.count,
+        page: page,
+        pageSize: pageSize,
+      );
     } on PostgrestException catch (e) {
       throw mapPostgrestError(e);
     } catch (e) {
-      _log('getRecommendedJobs error: ${e.runtimeType}');
+      _log('getRecommendedJobsPage error: ${e.runtimeType}');
       throw const AppException('Gagal memuat lowongan. Periksa koneksi Anda.');
     }
   }
+
+  Future<List<JobModel>> getRecommendedJobs({
+    List<String> locations = const [],
+    List<String> jobTypes = const [],
+    int page = 0,
+    int pageSize = 10,
+  }) async => (await getRecommendedJobsPage(
+    locations: locations,
+    jobTypes: jobTypes,
+    page: page,
+    pageSize: pageSize,
+  )).items;
 
   /// Detail satu lowongan. Null jika tidak ada atau tidak boleh dilihat.
   Future<JobModel?> getJobById(int idJob) async {
@@ -137,33 +193,55 @@ class JobService {
 
   // ----------------------------------------------------------------- RECRUITER
 
-  /// Lowongan milik perusahaan sendiri (Dibuka dan Ditutup).
-  Future<List<JobModel>> getMyJobs({
+  /// Lowongan milik perusahaan sendiri (Dibuka, Ditutup, dan Berakhir),
+  /// beserta jumlah pelamar. [query] mencari pada judul.
+  Future<PagedResult<JobModel>> getMyJobsPage({
     String? status,
+    String? query,
     int page = 0,
-    int pageSize = 10,
+    int pageSize = kPageSize,
   }) async {
     _validatePaging(page, pageSize);
     final company = await _requireMyCompany();
     try {
       var q = _client
           .from('jobs')
-          .select(_select)
+          .select(_recruiterSelect)
           .eq('id_company', company.idCompany);
       if (status != null) q = q.eq('status', status);
+      final term = _sanitizeSearch(query);
+      if (term.isNotEmpty) q = q.ilike('title', '%$term%');
 
       final from = page * pageSize;
-      final rows = await q
+      final res = await q
           .order('id_job', ascending: false)
-          .range(from, from + pageSize - 1);
-      return rows.map((r) => JobModel.fromMap(r)).toList();
+          .range(from, from + pageSize - 1)
+          .count(CountOption.exact);
+      return PagedResult<JobModel>(
+        items: res.data.map((r) => JobModel.fromMap(r)).toList(),
+        total: res.count,
+        page: page,
+        pageSize: pageSize,
+      );
     } on PostgrestException catch (e) {
       throw mapPostgrestError(e);
     } catch (e) {
-      _log('getMyJobs error: ${e.runtimeType}');
+      _log('getMyJobsPage error: ${e.runtimeType}');
       throw const AppException('Gagal memuat lowongan. Periksa koneksi Anda.');
     }
   }
+
+  Future<List<JobModel>> getMyJobs({
+    String? status,
+    String? query,
+    int page = 0,
+    int pageSize = 10,
+  }) async => (await getMyJobsPage(
+    status: status,
+    query: query,
+    page: page,
+    pageSize: pageSize,
+  )).items;
 
   Future<JobModel> createJob({
     required String title,
@@ -174,6 +252,7 @@ class JobService {
     String? skills,
     String? education,
     num? salary,
+    DateTime? deadline,
   }) async {
     _validateFields(
       title: title,
@@ -183,6 +262,7 @@ class JobService {
       workSystem: workSystem,
       education: education,
       salary: salary,
+      deadline: deadline,
       creating: true,
     );
     final company = await _requireMyCompany();
@@ -199,12 +279,13 @@ class JobService {
             if (_clean(skills) != null) 'skills': _clean(skills),
             if (_clean(education) != null) 'education': _clean(education),
             if (salary != null) 'salary': salary,
+            if (deadline != null) 'deadline': JobModel.isoDate(deadline),
           })
           .select(_select)
           .single();
       return JobModel.fromMap(row);
     } on PostgrestException catch (e) {
-      throw mapPostgrestError(e);
+      throw _mapJobError(e);
     } catch (e) {
       _log('createJob error: ${e.runtimeType}');
       throw const AppException('Gagal membuat lowongan. Periksa koneksi Anda.');
@@ -223,6 +304,7 @@ class JobService {
     String? skills,
     String? education,
     num? salary,
+    DateTime? deadline,
   }) async {
     _requireUid();
     _validateFields(
@@ -233,6 +315,7 @@ class JobService {
       workSystem: workSystem,
       education: education,
       salary: salary,
+      deadline: deadline,
       creating: false,
     );
     final changes = <String, dynamic>{
@@ -244,6 +327,7 @@ class JobService {
       if (skills != null) 'skills': _clean(skills),
       if (education != null) 'education': _clean(education),
       if (salary != null) 'salary': salary,
+      if (deadline != null) 'deadline': JobModel.isoDate(deadline),
     };
     if (changes.isEmpty) {
       throw const AppException('Tidak ada data yang diubah.');
@@ -254,8 +338,15 @@ class JobService {
   Future<JobModel> closeJob(int idJob) =>
       _update(idJob, {'status': JobOptions.statusClosed});
 
-  Future<JobModel> reopenJob(int idJob) =>
-      _update(idJob, {'status': JobOptions.statusOpen});
+  /// Membuka kembali lowongan. Jika tanggal tutupnya sudah lewat, wajib
+  /// mengisi [newDeadline]; database menolak tanggal yang sudah lewat.
+  Future<JobModel> reopenJob(int idJob, {DateTime? newDeadline}) {
+    _validateDeadline(newDeadline);
+    return _update(idJob, {
+      'status': JobOptions.statusOpen,
+      if (newDeadline != null) 'deadline': JobModel.isoDate(newDeadline),
+    });
+  }
 
   // ------------------------------------------------------------------- HELPERS
 
@@ -280,7 +371,7 @@ class JobService {
     } on AppException {
       rethrow;
     } on PostgrestException catch (e) {
-      throw mapPostgrestError(e);
+      throw _mapJobError(e);
     } catch (e) {
       _log('update error: ${e.runtimeType}');
       throw const AppException(
@@ -289,7 +380,30 @@ class JobService {
     }
   }
 
+  AppException _mapJobError(PostgrestException e) {
+    if (e.code == 'P0001') {
+      final msg = e.message;
+      if (msg.contains('JOB_BAD_DEADLINE')) {
+        return const AppException(
+          'Tanggal tutup harus antara hari ini dan 365 hari ke depan.',
+          code: 'bad_deadline',
+        );
+      }
+      if (msg.contains('JOB_DEADLINE_PASSED')) {
+        return const AppException(
+          'Tanggal tutup sudah lewat. Pilih tanggal tutup yang baru.',
+          code: 'deadline_passed',
+        );
+      }
+    }
+    return mapPostgrestError(e);
+  }
+
   Future<CompanyModel> _requireMyCompany() async {
+    final uid = _requireUid();
+    final cached = _cachedCompany;
+    if (cached != null && _cachedUid == uid) return cached;
+
     final company = await _companies.getMyCompany();
     if (company == null) {
       throw const AppException(
@@ -297,7 +411,21 @@ class JobService {
         code: 'no_company',
       );
     }
+    _cachedUid = uid;
+    _cachedCompany = company;
     return company;
+  }
+
+  void _validateDeadline(DateTime? deadline) {
+    if (deadline == null) return;
+    final today = JobModel.todayWib();
+    final d = DateTime(deadline.year, deadline.month, deadline.day);
+    final last = today.add(const Duration(days: JobOptions.maxDeadlineDays));
+    if (d.isBefore(today) || d.isAfter(last)) {
+      throw const AppException(
+        'Tanggal tutup harus antara hari ini dan 365 hari ke depan.',
+      );
+    }
   }
 
   void _validateFields({
@@ -308,6 +436,7 @@ class JobService {
     String? workSystem,
     String? education,
     num? salary,
+    DateTime? deadline,
     required bool creating,
   }) {
     if (creating || title != null) {
@@ -349,6 +478,7 @@ class JobService {
     if (salary != null && (salary.isNaN || salary.isInfinite || salary < 0)) {
       throw const AppException('Gaji tidak boleh negatif.');
     }
+    _validateDeadline(deadline);
   }
 
   void _validatePaging(int page, int pageSize) {

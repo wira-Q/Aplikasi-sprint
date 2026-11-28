@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sprint/JobSeeker/login.dart';
 import 'package:sprint/JobSeeker/signUp.dart';
 import 'package:sprint/JobSeeker/splashScreen.dart';
-
+import 'core/utils/app_scroll_behavior.dart';
 import 'config/supabase_config.dart';
 import 'core/utils/applications_debug_page.dart';
 import 'core/utils/auth_debug_page.dart';
@@ -53,6 +53,7 @@ class SprintApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sprint',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const AppScrollBehavior(),
       home: home,
       // Rute bernama yang dipakai halaman recruiter (Navigator.pushNamed).
       // Login dan register diarahkan ke halaman bersama milik Feriska.

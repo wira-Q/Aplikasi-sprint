@@ -1,7 +1,10 @@
-
 import 'package:flutter/material.dart';
-import 'job_store.dart';
+import 'package:sprint/models/job_model.dart';
+import 'package:sprint/models/profile_options.dart';
+
 import 'detail_tambahan_page.dart';
+import 'job_draft.dart';
+import 'recruiter_theme.dart';
 
 class BuatLowonganPage extends StatefulWidget {
   const BuatLowonganPage({super.key});
@@ -11,62 +14,82 @@ class BuatLowonganPage extends StatefulWidget {
 }
 
 class _BuatLowonganPageState extends State<BuatLowonganPage> {
+  static const int _maxSkills = 15;
+
   final _formKey = GlobalKey<FormState>();
 
-  final TextEditingController _judulController =
-      TextEditingController(text: 'Frontend Developer');
+  final TextEditingController _judulController = TextEditingController();
+  final TextEditingController _deskripsiController = TextEditingController();
+  final TextEditingController _skillController = TextEditingController();
 
-  final TextEditingController _deskripsiController =
-      TextEditingController(
-    text: 'Bertanggung jawab untuk pengembangan antarmuka pengguna (UI)',
-  );
+  final List<String> _skills = [];
 
-  final List<String> _skills = [
-    'Java',
-    'Next.js',
-    'Flutter',
-    'HTML',
+  String? _pendidikan;
+  String? _pengalaman;
+  String? _lokasi;
+  String? _errorMessage;
+
+  static const List<String> _pengalamanList = [
+    'Fresh Graduate',
+    'Kurang dari 1 tahun',
+    '1 - 2 tahun',
+    '3 - 5 tahun',
+    'Lebih dari 5 tahun',
   ];
-
-  String? _pendidikan = 'S1';
-  String? _pengalaman = '1 - 2 tahun';
-  String? _lokasi = 'Malang';
 
   @override
   void dispose() {
     _judulController.dispose();
     _deskripsiController.dispose();
+    _skillController.dispose();
     super.dispose();
   }
 
+  void _addSkill() {
+    // Koma dipakai sebagai pemisah di database, jadi diganti spasi.
+    final skill = _skillController.text.replaceAll(',', ' ').trim();
+    if (skill.isEmpty) return;
+    if (skill.length > 40) {
+      setState(() => _errorMessage = 'Nama skill maksimal 40 karakter.');
+      return;
+    }
+    if (_skills.length >= _maxSkills) {
+      setState(() => _errorMessage = 'Maksimal $_maxSkills skill.');
+      return;
+    }
+    if (_skills.any((s) => s.toLowerCase() == skill.toLowerCase())) {
+      _skillController.clear();
+      return;
+    }
+    setState(() {
+      _skills.add(skill);
+      _skillController.clear();
+      _errorMessage = null;
+    });
+  }
+
   // LANJUT KE HALAMAN DETAIL TAMBAHAN
-  Future<void> _lanjutkan() async {
+  void _lanjutkan() {
     if (!_formKey.currentState!.validate()) return;
+    if (_pendidikan == null || _pengalaman == null || _lokasi == null) {
+      setState(() => _errorMessage = 'Lengkapi semua isian bertanda *.');
+      return;
+    }
+    setState(() => _errorMessage = null);
 
-    final jobData = <String, dynamic>{
-      'title': _judulController.text.trim(),
-      'description': _deskripsiController.text.trim(),
-      'skills': List<String>.from(_skills),
-      'education': _pendidikan ?? '',
-      'experience': _pengalaman ?? '',
-      'location': _lokasi ?? '',
-      'applicants': 0,
-    };
-
-    final result = await Navigator.push<Map<String, dynamic>>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => DetailTambahanPage(
-          jobData: jobData,
-        ),
-      ),
+    final draft = JobDraft(
+      title: _judulController.text.trim(),
+      description: _deskripsiController.text.trim(),
+      skills: List<String>.from(_skills),
+      education: _pendidikan!,
+      experience: _pengalaman!,
+      location: _lokasi!,
     );
 
-    if (!mounted) return;
-
-    if (result != null) {
-      Navigator.pop(context, result);
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => DetailTambahanPage(draft: draft)),
+    );
   }
 
   Widget _label(String tulisan) {
@@ -94,24 +117,15 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
   InputDecoration _inputDecoration(String hint) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(
-        color: Color(0xFF8A8A8A),
-        fontSize: 11,
-      ),
-      contentPadding: const EdgeInsets.symmetric(
-        horizontal: 12,
-        vertical: 12,
-      ),
+      hintStyle: const TextStyle(color: Color(0xFF8A8A8A), fontSize: 11),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(4),
         borderSide: const BorderSide(color: Color(0xFFAAAAAA)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(4),
-        borderSide: const BorderSide(
-          color: primaryBlue,
-          width: 1.3,
-        ),
+        borderSide: const BorderSide(color: primaryBlue, width: 1.3),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(4),
@@ -125,10 +139,12 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
   }
 
   Widget _dropdown({
-    required String value,
+    required String hint,
+    required String? value,
     required List<String> items,
     required IconData icon,
     required ValueChanged<String?> onChanged,
+    String Function(String)? labelOf,
   }) {
     return Container(
       height: 46,
@@ -146,18 +162,19 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
               child: DropdownButton<String>(
                 value: value,
                 isExpanded: true,
-                icon: const Icon(
-                  Icons.keyboard_arrow_down,
-                  size: 18,
+                hint: Text(
+                  hint,
+                  style: const TextStyle(
+                    color: Color(0xFF8A8A8A),
+                    fontSize: 11,
+                  ),
                 ),
-                style: const TextStyle(
-                  color: Color(0xFF666666),
-                  fontSize: 11,
-                ),
+                icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+                style: const TextStyle(color: Color(0xFF666666), fontSize: 11),
                 items: items.map((item) {
                   return DropdownMenuItem(
                     value: item,
-                    child: Text(item),
+                    child: Text(labelOf == null ? item : labelOf(item)),
                   );
                 }).toList(),
                 onChanged: onChanged,
@@ -208,10 +225,11 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
                       _label('Judul posisi'),
                       TextFormField(
                         controller: _judulController,
+                        maxLength: 150,
                         style: const TextStyle(fontSize: 11),
                         decoration: _inputDecoration(
                           'Masukkan judul posisi',
-                        ),
+                        ).copyWith(counterText: ''),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return 'Judul posisi wajib diisi';
@@ -228,14 +246,15 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
                         maxLines: 4,
                         maxLength: 1000,
                         style: const TextStyle(fontSize: 11),
-                        decoration: _inputDecoration(
-                          'Masukkan deskripsi pekerjaan',
-                        ).copyWith(
-                          counterStyle: const TextStyle(
-                            fontSize: 8,
-                            color: Colors.grey,
-                          ),
-                        ),
+                        decoration:
+                            _inputDecoration(
+                              'Masukkan deskripsi pekerjaan',
+                            ).copyWith(
+                              counterStyle: const TextStyle(
+                                fontSize: 8,
+                                color: Colors.grey,
+                              ),
+                            ),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return 'Deskripsi pekerjaan wajib diisi';
@@ -247,6 +266,38 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
                       const SizedBox(height: 5),
 
                       _label('Skill yang dibutuhkan'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _skillController,
+                              style: const TextStyle(fontSize: 11),
+                              textInputAction: TextInputAction.done,
+                              onSubmitted: (_) => _addSkill(),
+                              decoration: _inputDecoration('Contoh: Flutter'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: _addSkill,
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: const BoxDecoration(
+                                color: primaryBlue,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.add,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
                       Wrap(
                         spacing: 6,
                         runSpacing: 7,
@@ -276,9 +327,7 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
                                   const SizedBox(width: 4),
                                   GestureDetector(
                                     onTap: () {
-                                      setState(() {
-                                        _skills.remove(skill);
-                                      });
+                                      setState(() => _skills.remove(skill));
                                     },
                                     child: const Icon(
                                       Icons.close,
@@ -297,14 +346,15 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
 
                       _label('Pendidikan Minimum'),
                       _dropdown(
-                        value: _pendidikan!,
-                        items: [
-                          'SMA/SMK', 'D1', 'D2', 'D3',
-                          'D4', 'S1', 'S2', 'S3',
-                        ],
+                        hint: 'Pilih pendidikan minimum',
+                        value: _pendidikan,
+                        items: EducationOptions.values,
                         icon: Icons.school_outlined,
                         onChanged: (value) {
-                          setState(() => _pendidikan = value);
+                          setState(() {
+                            _pendidikan = value;
+                            _errorMessage = null;
+                          });
                         },
                       ),
 
@@ -312,17 +362,15 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
 
                       _label('Pengalaman'),
                       _dropdown(
-                        value: _pengalaman!,
-                        items: [
-                          'Fresh Graduate',
-                          'Kurang dari 1 tahun',
-                          '1 - 2 tahun',
-                          '3 - 5 tahun',
-                          'Lebih dari 5 tahun',
-                        ],
+                        hint: 'Pilih pengalaman',
+                        value: _pengalaman,
+                        items: _pengalamanList,
                         icon: Icons.work_outline,
                         onChanged: (value) {
-                          setState(() => _pengalaman = value);
+                          setState(() {
+                            _pengalaman = value;
+                            _errorMessage = null;
+                          });
                         },
                       ),
 
@@ -330,21 +378,28 @@ class _BuatLowonganPageState extends State<BuatLowonganPage> {
 
                       _label('Lokasi'),
                       _dropdown(
-                        value: _lokasi!,
-                        items: [
-                          'Malang',
-                          'Surabaya',
-                          'Yogyakarta',
-                          'Jakarta',
-                          'Bandung',
-                          'Semarang',
-                          'Remote',
-                        ],
+                        hint: 'Pilih kota',
+                        value: _lokasi,
+                        items: JobOptions.locations,
                         icon: Icons.location_on_outlined,
                         onChanged: (value) {
-                          setState(() => _lokasi = value);
+                          setState(() {
+                            _lokasi = value;
+                            _errorMessage = null;
+                          });
                         },
                       ),
+
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          _errorMessage!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ],
 
                       const SizedBox(height: 25),
                     ],
